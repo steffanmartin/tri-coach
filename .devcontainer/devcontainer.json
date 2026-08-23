@@ -1,8 +1,12 @@
 {
   "name": "tri-coach",
-  "build": {
-    "dockerfile": "Dockerfile"
-  },
+  // Deliberately the plain "base" image, not the "python" variant: the
+  // python image bundles a system Node.js/yarn install whose apt source
+  // (dl.yarnpkg.com) ships with an untrusted GPG key, which breaks
+  // `apt-get update` for every feature installed after it. We don't need
+  // a preinstalled system Python anyway — `uv sync` in post-create.sh
+  // downloads its own Python 3.12 toolchain.
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
 
   "features": {
     "ghcr.io/devcontainers/features/azure-cli:1": {
