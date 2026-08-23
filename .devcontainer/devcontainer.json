@@ -29,10 +29,18 @@
     // agent.options() runs with cwd=VAULT_PATH; keep a local clone here so the
     // skills in .claude/ resolve the same way they do in the container.
     "VAULT_PATH": "/workspaces/tri-coach/vault",
-    "PATH": "/workspaces/tri-coach/.venv/bin:/home/vscode/.local/bin:${containerEnv:PATH}",
     // Keep uv's cache off the workspace bind mount and out of git.
     "UV_CACHE_DIR": "/home/vscode/.cache/uv",
     "UV_PROJECT_ENVIRONMENT": "/workspaces/tri-coach/.venv"
+  },
+
+  // ${containerEnv:PATH} only resolves at attach time (remoteEnv), not here:
+  // containerEnv gets baked into the image as a literal Dockerfile ENV, which
+  // would write the unresolved placeholder into PATH and break every feature
+  // install script and entrypoint that runs before VS Code ever attaches
+  // (e.g. docker-in-docker's init script losing /bin and /usr/bin).
+  "remoteEnv": {
+    "PATH": "/workspaces/tri-coach/.venv/bin:/home/vscode/.local/bin:${containerEnv:PATH}"
   },
 
   "postCreateCommand": "bash .devcontainer/post-create.sh",
