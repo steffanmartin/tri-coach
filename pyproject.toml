@@ -1,0 +1,18 @@
+[project]
+name = "tri-coach"
+version = "0.1.0"
+description = "Always-on triathlon coach: Telegram bot over the Claude Agent SDK, intervals.icu and a git-backed Obsidian vault."
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk>=0.1.48",
+    "python-telegram-bot>=21.0",
+    "apscheduler>=3.10",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+]
+
+[tool.uv]
+# The bot is an application, not a distributable library: coach/ is run with
+# `python -m coach.telegram_bot`, never imported by anything else. Skipping the
+# build step keeps `uv sync` to just the dependencies.
+package = false

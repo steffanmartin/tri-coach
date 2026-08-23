@@ -23,8 +23,8 @@ at a real cloned vault and the `claude` CLI + `uv` on PATH (the Dockerfile
 installs both; the SDK shells out to the CLI, and `uvx` launches the intervals MCP):
 
 ```bash
-pip install -r requirements.txt
-python -m coach.telegram_bot
+uv sync
+uv run python -m coach.telegram_bot
 ```
 
 There is no test suite, linter, or CI. Verification is manual: `/status` in
