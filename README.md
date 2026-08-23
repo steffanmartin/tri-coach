@@ -16,8 +16,11 @@ Obsidian vault, reachable over Telegram, with a 06:30 readiness job.
 | Training data | intervals.icu, via MCP | single source of truth for anything numeric |
 | Deep planning sessions | Claude.ai in a browser | long back-and-forth is miserable on a phone keyboard |
 
-Host: any small always-on box. A €4/mo Hetzner CX22 or an Azure Container App
-with `minReplicas: 1` both work. Do not use scale-to-zero — long polling dies.
+Host: any always-on box or container with **4 GB RAM** (the Claude Code CLI is the
+memory hog). Deployed on **Azure Container Apps**, Consumption, 2 vCPU / 4 GiB with
+`minReplicas: 1` — see [`infra/`](infra/README.md). Do not use scale-to-zero, and do
+not run more than one replica: long polling dies with the process, and two pollers on
+one Telegram token both fail.
 
 ---
 
@@ -56,7 +59,7 @@ check, anyone who finds the bot gets your training data.
 ### 4. Deploy
 ```bash
 cp .env.example .env      # fill it in
-ssh-keygen -t ed25519 -f ~/.ssh/vault_deploy   # add pubkey as a repo deploy key (write access)
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519   # add pubkey as a repo deploy key (write access)
 docker compose up -d --build
 docker compose logs -f
 ```
