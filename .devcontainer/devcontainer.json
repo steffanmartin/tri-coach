@@ -1,0 +1,67 @@
+{
+  "name": "tri-coach",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  "features": {
+    "ghcr.io/devcontainers/features/azure-cli:1": {
+      "version": "latest",
+      "installBicep": true
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true
+    }
+  },
+
+  "containerEnv": {
+    "TZ": "Europe/Copenhagen",
+    // agent.options() runs with cwd=VAULT_PATH; keep a local clone here so the
+    // skills in .claude/ resolve the same way they do in the container.
+    "VAULT_PATH": "/workspaces/tri-coach/vault",
+    "PATH": "/workspaces/tri-coach/.venv/bin:/home/vscode/.local/bin:${containerEnv:PATH}",
+    // Keep uv's cache off the workspace bind mount and out of git.
+    "UV_CACHE_DIR": "/home/vscode/.cache/uv",
+    "UV_PROJECT_ENVIRONMENT": "/workspaces/tri-coach/.venv"
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  "mounts": [
+    // Deploy key for the vault repo, plus the host's az login cache so
+    // `az deployment group create` works without re-authenticating.
+    "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.azure,target=/home/vscode/.azure,type=bind,consistency=cached"
+  ],
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-azuretools.vscode-bicep",
+        "ms-azuretools.vscode-azurecontainerapps",
+        "ms-azuretools.vscode-azureresourcegroups",
+        "ms-azuretools.vscode-docker",
+        "ms-vscode.azurecli",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        // uv owns the environment; it lives in the workspace, not the image.
+        "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+        "python.terminal.activateEnvInCurrentTerminal": true,
+        "files.associations": {
+          "*.bicepparam": "bicep-params"
+        }
+      }
+    }
+  },
+
+  "remoteUser": "vscode"
+}
