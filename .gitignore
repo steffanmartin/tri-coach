@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+.env
+
+# local clone of the vault repo (see VAULT_PATH in README/.env.example)
+/vault/
+
+.DS_Store

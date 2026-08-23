@@ -1,0 +1,12 @@
+services:
+  coach:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - vault:/vault
+      - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro   # deploy key for the vault repo
+      - ./.claude:/vault/.claude:ro                  # skills live alongside the vault
+
+volumes:
+  vault:
