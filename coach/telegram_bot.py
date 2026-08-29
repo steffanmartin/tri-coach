@@ -3,11 +3,11 @@ import logging
 import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Update
+from telegram import MessageEntity, Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from . import agent, daily_brief, vault, wellness_sync
+from . import agent, daily_brief, telegram_format, vault, wellness_sync
 
 logging.basicConfig(level=logging.INFO)
 ALLOWED = str(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
@@ -25,8 +25,8 @@ async def _ask(update: Update, context: ContextTypes.DEFAULT_TYPE, prompt: str) 
         reply = await agent.run(prompt)
     except Exception as exc:
         reply = f"Something broke: {type(exc).__name__}: {exc}"
-    for i in range(0, len(reply) or 1, 4000):  # Telegram caps at 4096 chars
-        await update.message.reply_text(reply[i : i + 4000] or "(no reply)")
+    for text, entities in await telegram_format.text_chunks(reply):
+        await update.message.reply_text(text, entities=[MessageEntity(**e) for e in entities])
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

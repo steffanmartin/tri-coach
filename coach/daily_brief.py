@@ -5,7 +5,7 @@ from datetime import date
 
 import httpx
 
-from . import agent
+from . import agent, telegram_format
 
 PROMPT = f"""Run the `daily-readiness` skill for {date.today().isoformat()}.
 
@@ -23,10 +23,15 @@ def _extract(reply: str) -> str:
 async def send(text: str) -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     async with httpx.AsyncClient(timeout=30) as client:
-        await client.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": os.environ["TELEGRAM_ALLOWED_CHAT_ID"], "text": text},
-        )
+        for chunk, entities in await telegram_format.text_chunks(text):
+            await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": os.environ["TELEGRAM_ALLOWED_CHAT_ID"],
+                    "text": chunk,
+                    "entities": entities,
+                },
+            )
 
 
 async def main() -> None:

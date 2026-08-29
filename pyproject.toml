@@ -9,6 +9,7 @@ dependencies = [
     "apscheduler>=3.10",
     "httpx>=0.27",
     "python-dotenv>=1.0",
+    "telegramify-markdown>=1.2.0",
 ]
 
 [tool.uv]
