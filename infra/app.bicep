@@ -132,7 +132,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         // Pinned to exactly one replica, and this is not negotiable: Telegram
         // allows a single getUpdates poller per token, so a second replica makes
         // both replicas fail with 409 Conflict. minReplicas 1 also keeps the
-        // 06:30 APScheduler job alive — scale-to-zero would silently kill it.
+        // 07:00 APScheduler job alive — scale-to-zero would silently kill it.
         minReplicas: 1
         maxReplicas: 1
       }

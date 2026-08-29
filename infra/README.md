@@ -9,10 +9,13 @@ its Key Vault secrets have values.
 
 ## 1. Resource group + platform
 
+`main.bicep` is subscription-scoped: it creates the `tri-coach` resource group
+itself, then deploys the platform resources (`platform.bicep`) into it as a
+module. No separate `az group create` step.
+
 ```bash
-az group create -n tri-coach -l westeurope
-az deployment group create -g tri-coach -f infra/main.bicep -p infra/main.bicepparam
-az deployment group show -g tri-coach -n main --query properties.outputs
+az deployment sub create -l westeurope -f infra/main.bicep -p infra/main.bicepparam
+az deployment sub show -n main --query properties.outputs
 ```
 
 ## 2. Build and push the image
@@ -39,8 +42,6 @@ az keyvault secret set --vault-name "$KV" -n vault-ssh-key   --file ./vault_depl
 az keyvault secret set --vault-name "$KV" -n anthropic-api-key  --value "sk-ant-..."
 az keyvault secret set --vault-name "$KV" -n intervals-api-key  --value "..."
 az keyvault secret set --vault-name "$KV" -n telegram-bot-token --value "123456:ABC..."
-
-shred -u ./vault_deploy   # the private half now lives only in Key Vault
 ```
 
 Setting secrets requires **Key Vault Secrets Officer** on the vault for *you* —
@@ -81,6 +82,40 @@ az deployment group create -g tri-coach -f infra/app.bicep -p infra/app.biceppar
 
 A new tag creates a new revision; `activeRevisionsMode: Single` retires the old
 one automatically.
+
+## CI deploy
+
+`.github/workflows/deploy.yml` runs the "build, push, redeploy" sequence above
+on every push to `main` (and on manual dispatch). It authenticates to Azure
+via OIDC — no client secret to rotate — so it needs a one-time setup:
+
+```bash
+APP_ID=$(az ad app create --display-name tri-coach-gha --query appId -o tsv)
+az ad sp create --id "$APP_ID"
+
+az ad app federated-credential create --id "$APP_ID" --parameters '{
+  "name": "tri-coach-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:<owner>/<repo>:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+
+az role assignment create --assignee "$APP_ID" --role Contributor \
+  --scope "$(az group show -n tri-coach --query id -o tsv)"
+```
+
+Then set these as GitHub Actions repo secrets:
+
+- `AZURE_CLIENT_ID` — the `$APP_ID` above
+- `AZURE_TENANT_ID` — `az account show --query tenantId -o tsv`
+- `AZURE_SUBSCRIPTION_ID` — `az account show --query id -o tsv`
+
+The workflow reads `acrName`, `acrLoginServer`, `environmentId`, `identityId`,
+and `keyVaultUri` from the `main` deployment's outputs at run time (`az
+deployment group show -n main`), so nothing from step 1 needs to be
+duplicated as a secret. It still expects `infra/app.bicepparam` to carry the
+non-secret config (`intervalsAthleteId`, `telegramAllowedChatId`, `vaultRepo`,
+etc.) and the Key Vault secrets from step 3 to already exist.
 
 ## Things that will bite
 

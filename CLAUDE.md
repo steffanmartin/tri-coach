@@ -15,7 +15,18 @@ web service — the vault repo *is* the state store.
 ```bash
 docker compose up -d --build          # build + run the bot (the only real "run" path)
 docker compose logs -f
-docker compose exec coach python -m coach.daily_brief   # fire the 06:30 job now, without waiting
+docker compose exec coach python -m coach.daily_brief   # fire the 07:00 job now, without waiting
+docker compose exec coach python -m coach.wellness_sync --days 7   # pull HRV/RHR/sleep now
+docker compose exec coach python -m coach.calendar_sync --dry-run  # see the calendar snapshot
+```
+
+One-off setup for the Google grant (laptop, needs a browser once):
+
+```bash
+uv run python scripts/google_auth.py --scopes health   # mint GOOGLE_HEALTH_REFRESH_TOKEN
+uv run python scripts/google_auth.py --scopes calendar # mint GOOGLE_CALENDAR_REFRESH_TOKEN
+uv run python -m coach.wellness_sync --days 90 --dry-run  # check before writing
+uv run python -m coach.wellness_sync --days 90            # backfill
 ```
 
 Local runs need every var in `.env.example` exported, plus `VAULT_PATH` pointed
@@ -34,7 +45,7 @@ Telegram for the bot path, `python -m coach.daily_brief` for the scheduled path.
 
 **One process, two entry points.** `coach/telegram_bot.py:main` starts both the
 polling loop and an in-process `AsyncIOScheduler` that calls `daily_brief.main`
-at 06:30. Deliberate: the container is already always-on, so separate scheduler
+at 07:00. Deliberate: the container is already always-on, so separate scheduler
 infra would be wasted. This also means **the host must not scale to zero** —
 long polling dies with the process.
 
@@ -57,7 +68,39 @@ mirrored in the skills. The agent writes only `10 Plan/`, `20 Daily/`,
 `30 Sessions/`; `00 Meta/` is read-only input; `40 Journal/` and `50 Races/` are
 the athlete's alone. This split is what keeps Obsidian's auto-commit and the
 agent's commits from ever conflicting — do not widen the agent's write scope
-without rethinking that.
+without rethinking that. `00 Meta/calendar.md` is the one machine-written file:
+`calendar_sync` owns it outright, nothing else writes it, and the agent reads it
+like any other `00 Meta/` input.
+
+**Wellness is synced in, not read live.** Coros supplies activities only. All
+four wellness fields — `hrv`, `restingHR`, `sleepSecs`, `steps` — come from a
+Fitbit Air via the Google Health API, and `coach/wellness_sync.py` PUTs them to
+intervals.icu's `wellness-bulk` endpoint ~15 min before the brief. Steps are
+written a day behind: the other three are overnight measurements and final by
+06:15, but today's step count has barely started. The agent is deliberately
+unaware of this: it still reads every number through the intervals MCP, so
+"numbers come from intervals.icu" stays literally true and `daily-readiness` gets
+its 60-day baselines computed by intervals.icu rather than by the model. Writes
+are upserts keyed by date, so re-running a window corrects it. **Do not give the
+agent a second numbers source** — that is the whole point of the sync.
+
+**The calendar is snapshotted, not queried.** The agent has no Bash and no
+network tools, so `coach/calendar_sync.py` renders the next three weeks of
+Google Calendar into `00 Meta/calendar.md` and the agent Reads it like any other
+note. `agent.run` refreshes it after `vault.pull()` on *every* turn, not in the
+`/week` handler, because `week-planner` is reachable by plain text too. The
+refresh is best-effort: a Google outage leaves the stale snapshot in place
+rather than taking the bot down, and the file is only rewritten when its content
+changes, so an unchanged calendar produces no commit. Note that Steffan's
+calendar contains real training (squad sessions), so entries are not uniformly
+obstacles — `week-planner` is told to treat those as already-committed sessions.
+
+**Health and calendar use separate OAuth grants and must stay separate.** One
+client, two refresh tokens (`GOOGLE_HEALTH_REFRESH_TOKEN`,
+`GOOGLE_CALENDAR_REFRESH_TOKEN`), minted by `scripts/google_auth.py --scopes ...`.
+The Google Health API allowlists its own scopes and 403s any token that also
+carries the calendar scope, so merging the two grants silently breaks wellness
+while calendar keeps working. `coach/google_oauth.py` is the shared exchange.
 
 **Model split is intentional**: `COACH_MODEL` (Sonnet) for the ~365 daily runs,
 `PLANNER_MODEL` (Opus) passed explicitly for `plan-architect`, which runs a

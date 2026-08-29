@@ -1,4 +1,4 @@
-"""06:30 job: read wellness, decide today's session, write the note, ping Telegram."""
+"""07:00 job: read wellness, decide today's session, write the note, ping Telegram."""
 import asyncio
 import os
 from datetime import date
@@ -33,7 +33,7 @@ async def main() -> None:
     try:
         reply = await agent.run(PROMPT)
         await send(_extract(reply))
-    except Exception as exc:  # never fail silently at 06:30
+    except Exception as exc:  # never fail silently at 07:00
         await send(f"Coach job failed: {type(exc).__name__}: {exc}")
 
 

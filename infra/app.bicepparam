@@ -8,7 +8,7 @@ param keyVaultUri = ''
 
 param imageTag = ''
 
-param intervalsAthleteId = 'i123456'
-param telegramAllowedChatId = '123456789'
-param vaultRepo = 'git@github.com:you/triathlon-brain.git'
+param intervalsAthleteId = 'i668762'
+param telegramAllowedChatId = '8679015003'
+param vaultRepo = 'git@github.com:steffanmartin/triathlon-brain.git'
 param timeZone = 'Europe/Copenhagen'

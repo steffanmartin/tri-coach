@@ -1,109 +1,45 @@
-// Platform resources for tri-coach: registry, secret store, identity, and the
-// Container Apps environment. Deploy this first — the container app itself lives
-// in app.bicep and expects the Key Vault secrets to already have values.
-targetScope = 'resourceGroup'
+// Subscription-scoped entry point: creates the resource group, then deploys the
+// platform resources (registry, secret store, identity, Container Apps
+// environment — defined in platform.bicep) into it as a module. Deploy this
+// first — the container app itself lives in app.bicep and expects the Key
+// Vault secrets to already have values.
+targetScope = 'subscription'
 
 @description('Short name used as a prefix for every resource.')
 param name string = 'tricoach'
 
 @description('Region. Container Apps + ACR + Key Vault must all support it.')
-param location string = resourceGroup().location
+param location string = 'westeurope'
+
+@description('Resource group to create and deploy the platform resources into.')
+param resourceGroupName string = 'tri-coach'
 
 @description('Log retention. 30 days is the free-tier ceiling and plenty for one bot.')
 param logRetentionDays int = 30
 
-var uniq = uniqueString(resourceGroup().id)
-var acrName = '${name}acr${uniq}'
-var kvName = '${name}-kv-${substring(uniq, 0, 8)}'
+@description('GitHub repo (owner/name) allowed to deploy via OIDC federation.')
+param githubRepo string = 'steffanmartin/tri-coach'
 
-// --- Identity -------------------------------------------------------------
-// User-assigned rather than system-assigned: the container app needs ACR pull
-// rights at *creation* time to start its first revision, and a system-assigned
-// identity does not exist until after the app is created.
-resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${name}-id'
+resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
+  name: resourceGroupName
   location: location
 }
 
-// --- Container registry ---------------------------------------------------
-resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
-  name: acrName
-  location: location
-  sku: { name: 'Basic' }
-  properties: {
-    // Admin user is off: the app pulls with its managed identity instead, so
-    // there is no registry password to leak or rotate.
-    adminUserEnabled: false
+module platform 'platform.bicep' = {
+  name: 'platform'
+  scope: rg
+  params: {
+    name: name
+    location: location
+    logRetentionDays: logRetentionDays
+    githubRepo: githubRepo
   }
 }
 
-var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-
-resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, identity.id, acrPullRoleId)
-  scope: acr
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
-    principalId: identity.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// --- Secret store ---------------------------------------------------------
-resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: kvName
-  location: location
-  properties: {
-    tenantId: subscription().tenantId
-    sku: { family: 'A', name: 'standard' }
-    enableRbacAuthorization: true
-    enableSoftDelete: true
-    softDeleteRetentionInDays: 7
-    publicNetworkAccess: 'Enabled'
-  }
-}
-
-var kvSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
-
-resource kvRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(vault.id, identity.id, kvSecretsUserRoleId)
-  scope: vault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
-    principalId: identity.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// --- Logs -----------------------------------------------------------------
-resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
-  name: '${name}-logs'
-  location: location
-  properties: {
-    sku: { name: 'PerGB2018' }
-    retentionInDays: logRetentionDays
-  }
-}
-
-// --- Container Apps environment -------------------------------------------
-resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
-  name: '${name}-env'
-  location: location
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: logs.properties.customerId
-        sharedKey: logs.listKeys().primarySharedKey
-      }
-    }
-    zoneRedundant: false
-  }
-}
-
-output acrName string = acr.name
-output acrLoginServer string = acr.properties.loginServer
-output keyVaultName string = vault.name
-output keyVaultUri string = vault.properties.vaultUri
-output identityId string = identity.id
-output environmentId string = env.id
+output acrName string = platform.outputs.acrName
+output acrLoginServer string = platform.outputs.acrLoginServer
+output keyVaultName string = platform.outputs.keyVaultName
+output keyVaultUri string = platform.outputs.keyVaultUri
+output identityId string = platform.outputs.identityId
+output environmentId string = platform.outputs.environmentId
+output ciClientId string = platform.outputs.ciClientId

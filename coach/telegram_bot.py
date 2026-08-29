@@ -7,7 +7,7 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from . import agent, daily_brief, vault
+from . import agent, daily_brief, vault, wellness_sync
 
 logging.basicConfig(level=logging.INFO)
 ALLOWED = str(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
@@ -54,21 +54,36 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 def main() -> None:
     vault.ensure_clone()
-    app = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
+
+    scheduler = AsyncIOScheduler(timezone=os.environ.get("TZ", "Europe/Copenhagen"))
+    brief_hour = int(os.environ.get("DAILY_BRIEF_CRON_HOUR", 6))
+    brief_minute = int(os.environ.get("DAILY_BRIEF_CRON_MINUTE", 30))
+
+    # Wellness lands before the brief reads it. The 7-day window is not just for
+    # today: Fitbit revises a night's HRV after the fact, and the upsert picks
+    # those corrections up.
+    lead = (brief_hour * 60 + brief_minute) - int(os.environ.get("WELLNESS_SYNC_LEAD_MIN", 15))
+    scheduler.add_job(
+        wellness_sync.main, "cron", hour=(lead // 60) % 24, minute=lead % 60
+    )
+    scheduler.add_job(daily_brief.main, "cron", hour=brief_hour, minute=brief_minute)
+
+    # AsyncIOScheduler.start() needs a running loop, which doesn't exist yet in
+    # this synchronous main() — post_init runs inside the loop run_polling creates.
+    async def _start_scheduler(_: Application) -> None:
+        scheduler.start()
+
+    app = (
+        Application.builder()
+        .token(os.environ["TELEGRAM_BOT_TOKEN"])
+        .post_init(_start_scheduler)
+        .build()
+    )
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("week", cmd_week))
     app.add_handler(CommandHandler("debrief", cmd_debrief))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
-
-    scheduler = AsyncIOScheduler(timezone=os.environ.get("TZ", "Europe/Copenhagen"))
-    scheduler.add_job(
-        daily_brief.main,
-        "cron",
-        hour=int(os.environ.get("DAILY_BRIEF_CRON_HOUR", 6)),
-        minute=int(os.environ.get("DAILY_BRIEF_CRON_MINUTE", 30)),
-    )
-    scheduler.start()
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

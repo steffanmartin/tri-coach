@@ -1,7 +1,7 @@
 # tri-coach
 
 An always-on triathlon coach: Claude Agent SDK + intervals.icu + a git-backed
-Obsidian vault, reachable over Telegram, with a 06:30 readiness job.
+Obsidian vault, reachable over Telegram, with a 07:00 readiness job.
 
 ---
 
@@ -10,7 +10,7 @@ Obsidian vault, reachable over Telegram, with a 06:30 readiness job.
 | Piece | Where | Why there |
 |---|---|---|
 | Telegram bot (long polling) | one small container | needs to be always-on; long polling means no public endpoint, no TLS, no webhook |
-| 06:30 daily brief | same container, APScheduler | already always-on, so a separate scheduler is wasted infra |
+| 07:00 daily brief | same container, APScheduler | already always-on, so a separate scheduler is wasted infra |
 | Coaching skills | `.claude/skills/`, mounted into the container | plain markdown, version-controlled, editable from Obsidian |
 | Memory | the Obsidian vault, via git | the vault *is* the memory; no database |
 | Training data | intervals.icu, via MCP | single source of truth for anything numeric |
@@ -65,7 +65,7 @@ docker compose logs -f
 ```
 
 Verify: send `/status` in Telegram. Then `python -m coach.daily_brief` inside the
-container to test the morning job without waiting for 06:30.
+container to test the morning job without waiting for 07:00.
 
 ### 5. Seed the plan
 Set `race_date` in `10 Plan/ironman-macro-plan.md`, fill in the TBDs in

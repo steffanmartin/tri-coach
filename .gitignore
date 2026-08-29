@@ -8,5 +8,6 @@ venv/
 
 # local clone of the vault repo (see VAULT_PATH in README/.env.example)
 /vault/
+/triathlon-brain/
 
 .DS_Store

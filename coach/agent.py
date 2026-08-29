@@ -3,7 +3,7 @@ import os
 
 from claude_agent_sdk import ClaudeAgentOptions, query
 
-from . import vault
+from . import calendar_sync, vault
 
 SYSTEM_PROMPT = """You are Steffan's triathlon coach.
 
@@ -69,6 +69,10 @@ def _text(message) -> str:
 
 async def run(prompt: str, model: str | None = None) -> str:
     vault.pull()
+    # Refreshed here rather than in the /week handler because `week-planner` is
+    # also reachable by plain text ("plan my week"), which never touches a
+    # command handler. After the pull, so the write lands on top of the rebase.
+    calendar_sync.refresh_quietly()
     chunks = []
     async for message in query(prompt=prompt, options=options(model)):
         chunks.append(_text(message))

@@ -1,4 +1,5 @@
 using './main.bicep'
 
 param name = 'tricoach'
-param location = 'westeurope'
+param location = 'swedencentral'
+param resourceGroupName = 'rg-tri-coach'

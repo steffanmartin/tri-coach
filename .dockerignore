@@ -1,0 +1,7 @@
+.git
+.venv
+__pycache__
+*.pyc
+triathlon-brain
+vault-template
+scripts
