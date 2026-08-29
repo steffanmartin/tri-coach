@@ -3,7 +3,7 @@ import os
 
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
 
-from . import calendar_sync, coros_oauth, vault
+from . import calendar_sync, vault
 
 SYSTEM_PROMPT = """You are Steffan's triathlon coach.
 
@@ -57,47 +57,15 @@ def _intervals_mcp() -> dict:
     }
 
 
-# COROS is a WRITE path only. intervals.icu stays the single source of numbers
-# (see CLAUDE.md), and the COROS connector also serves sleep/HRV/load reads —
-# so the agent is handed only the tools that push a workout out, never the ones
-# that read a metric back. Widening this list re-opens the second-numbers-source
-# problem the wellness sync exists to avoid.
-COROS_WRITE_TOOLS: list[str] = []
-
-
-def _coros_mcp() -> dict:
-    """COROS MCP over HTTP, or nothing if the grant is not configured.
-
-    Best-effort like the calendar snapshot: a COROS outage or an expired grant
-    costs us the watch push, it does not take the bot down. The failure surfaces
-    when the agent tries to call a tool that is not there and says so.
-    """
-    if not os.environ.get("COROS_REFRESH_TOKEN"):
-        return {}
-    try:
-        token = coros_oauth.access_token()
-    except Exception as exc:  # noqa: BLE001 - never fatal
-        print(f"coros: no connector this turn ({exc})")
-        return {}
-    return {
-        "coros": {
-            "type": "http",
-            "url": coros_oauth.MCP_URL,
-            "headers": {"Authorization": f"Bearer {token}"},
-        }
-    }
-
-
 def options(model: str | None = None) -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         model=model or os.environ.get("COACH_MODEL", "claude-sonnet-5"),
         system_prompt=SYSTEM_PROMPT,
         cwd=str(vault.VAULT_PATH),
-        mcp_servers={**_intervals_mcp(), **_coros_mcp()},
+        mcp_servers=_intervals_mcp(),
         setting_sources=["project"],  # loads .claude/skills/
         allowed_tools=[
             "Read", "Write", "Edit", "Glob", "Grep", "Skill", "mcp__intervals",
-            *COROS_WRITE_TOOLS,
         ],
         permission_mode="acceptEdits",
     )

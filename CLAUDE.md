@@ -102,27 +102,6 @@ The Google Health API allowlists its own scopes and 403s any token that also
 carries the calendar scope, so merging the two grants silently breaks wellness
 while calendar keeps working. `coach/google_oauth.py` is the shared exchange.
 
-**The COROS connector is a write path, not a read path.** `coach/coros_oauth.py`
-mints a bearer token and `agent._coros_mcp` attaches COROS's hosted MCP server so
-the agent can push structured **gym and swim** workouts straight to the watch —
-the two disciplines intervals.icu cannot send as structured workouts, which is
-why bike and run keep going out through the intervals.icu calendar as before.
-The connector also exposes sleep, HRV, load and daily metrics; the agent is
-deliberately not given those tools. `COROS_WRITE_TOOLS` in `coach/agent.py` is
-the allowlist, and widening it re-creates exactly the second-numbers-source
-problem that `wellness_sync` exists to prevent. Everything is best-effort: no
-grant, an expired token, or a COROS outage costs the watch push and nothing else.
-
-**COROS auth is dynamically registered, unlike Google's.** There is no developer
-console and no API key — `scripts/coros_auth.py` registers a public PKCE client
-with COROS at runtime and mints the refresh token in the same pass, printing
-`COROS_CLIENT_ID` and `COROS_REFRESH_TOKEN` together. They are a pair; re-running
-the script replaces both. Pin `COROS_MCP_BASE` to the regional host
-(`https://mcpeu.coros.com`): the advertised unified endpoint `mcp.coros.com`
-redirects to a protected resource that does not match the URL you asked for, and
-strict MCP clients refuse it. The connector is new and its tool names are not a
-stable contract — `scripts/coros_auth.py --list-tools` dumps the live list.
-
 **Model split is intentional**: `COACH_MODEL` (Sonnet) for the ~365 daily runs,
 `PLANNER_MODEL` (Opus) passed explicitly for `plan-architect`, which runs a
 handful of times a season. `agent.run(prompt, model=...)` is the seam.
