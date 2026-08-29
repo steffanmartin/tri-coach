@@ -13,8 +13,15 @@ param location string = resourceGroup().location
 @description('Log retention. 30 days is the free-tier ceiling and plenty for one bot.')
 param logRetentionDays int = 30
 
-@description('GitHub repo (owner/name) allowed to deploy via OIDC federation.')
-param githubRepo string = 'steffanmartin/tri-coach'
+@description('''
+GitHub OIDC subject prefix (repo:...) allowed to deploy via federation. Not
+plain "owner/repo": this account has GitHub's immutable-subject default on, so
+the token's actual subject embeds numeric owner/repo IDs
+(`repo:<owner>@<ownerId>/<repo>@<repoId>`) — confirmed via
+`gh api repos/OWNER/REPO/actions/oidc/customization/sub`, which is the source
+of truth if this repo is ever renamed or forked into a new one.
+''')
+param githubOidcSubjectPrefix string = 'repo:steffanmartin@55839566/tri-coach@1343576713'
 
 var uniq = uniqueString(resourceGroup().id)
 var acrName = '${name}acr${uniq}'
@@ -98,7 +105,7 @@ resource ciFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities
     issuer: 'https://token.actions.githubusercontent.com'
     // Covers both `push` to main and `workflow_dispatch` run from main — GitHub
     // issues the same subject for both as long as the run is on that branch.
-    subject: 'repo:${githubRepo}:ref:refs/heads/main'
+    subject: '${githubOidcSubjectPrefix}:ref:refs/heads/main'
     audiences: ['api://AzureADTokenExchange']
   }
 }

@@ -17,8 +17,8 @@ param resourceGroupName string = 'tri-coach'
 @description('Log retention. 30 days is the free-tier ceiling and plenty for one bot.')
 param logRetentionDays int = 30
 
-@description('GitHub repo (owner/name) allowed to deploy via OIDC federation.')
-param githubRepo string = 'steffanmartin/tri-coach'
+@description('GitHub OIDC subject prefix (repo:...) allowed to deploy via federation. See platform.bicep for why this is not plain "owner/repo".')
+param githubOidcSubjectPrefix string = 'repo:steffanmartin@55839566/tri-coach@1343576713'
 
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   name: resourceGroupName
@@ -32,7 +32,7 @@ module platform 'platform.bicep' = {
     name: name
     location: location
     logRetentionDays: logRetentionDays
-    githubRepo: githubRepo
+    githubOidcSubjectPrefix: githubOidcSubjectPrefix
   }
 }
 
