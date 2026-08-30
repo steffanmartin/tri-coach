@@ -12,6 +12,21 @@ import httpx
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
+def _required(var: str) -> str:
+    """A bare KeyError here reaches Steffan as a Telegram alert naming only the
+    variable, which does not say *where* to set it. The deploy path and the local
+    path store this in different places, so say both."""
+    try:
+        return os.environ[var]
+    except KeyError:
+        raise RuntimeError(
+            f"{var} is not set. In Azure it comes from the Key Vault secret "
+            f"referenced in infra/app.bicep (a new revision is needed after "
+            f"setting it); locally it comes from .env. Mint one with "
+            f"scripts/google_auth.py."
+        ) from None
+
+
 def access_token(refresh_var: str) -> str:
     """Mint a short-lived access token from the refresh token in `refresh_var`.
 
@@ -22,9 +37,9 @@ def access_token(refresh_var: str) -> str:
         TOKEN_URL,
         data={
             "grant_type": "refresh_token",
-            "refresh_token": os.environ[refresh_var],
-            "client_id": os.environ["GOOGLE_HEALTH_CLIENT_ID"],
-            "client_secret": os.environ["GOOGLE_HEALTH_CLIENT_SECRET"],
+            "refresh_token": _required(refresh_var),
+            "client_id": _required("GOOGLE_HEALTH_CLIENT_ID"),
+            "client_secret": _required("GOOGLE_HEALTH_CLIENT_SECRET"),
         },
         timeout=30,
     )

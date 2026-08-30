@@ -12,3 +12,5 @@ param intervalsAthleteId = 'i668762'
 param telegramAllowedChatId = '8679015003'
 param vaultRepo = 'git@github.com:steffanmartin/triathlon-brain.git'
 param timeZone = 'Europe/Copenhagen'
+param dailyBriefHour = 7
+param dailyBriefMinute = 0

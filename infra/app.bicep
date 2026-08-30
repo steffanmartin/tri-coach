@@ -24,17 +24,30 @@ param vaultRepo string
 param gitAuthorName string = 'tri-coach'
 param gitAuthorEmail string = 'coach@localhost'
 param timeZone string = 'Europe/Copenhagen'
-param dailyBriefHour int = 6
-param dailyBriefMinute int = 30
+// 07:00 here, in .env, and in CLAUDE.md. The wellness sync runs
+// wellnessSyncLeadMin before it, so 06:45.
+param dailyBriefHour int = 7
+param dailyBriefMinute int = 0
+param wellnessSyncLeadMin int = 15
+
+@description('Calendars snapshotted into 00 Meta/calendar.md. Comma-separated ids, or "primary".')
+param googleCalendarIds string = 'primary'
 
 // Key Vault secret names. Values are set out-of-band with `az keyvault secret set`
 // so no secret ever passes through a template, a parameter file, or a deployment
 // history entry.
+// The Google client id is not a credential on its own, but it is kept here with
+// the rest of the OAuth material rather than in the parameter file so the whole
+// grant lives in one place.
 var secretNames = {
   anthropic: 'anthropic-api-key'
   intervals: 'intervals-api-key'
   telegram: 'telegram-bot-token'
   vaultSshKey: 'vault-ssh-key'
+  googleClientId: 'google-health-client-id'
+  googleClientSecret: 'google-health-client-secret'
+  googleHealthRefresh: 'google-health-refresh-token'
+  googleCalendarRefresh: 'google-calendar-refresh-token'
 }
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
@@ -77,6 +90,28 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           keyVaultUrl: '${keyVaultUri}secrets/${secretNames.vaultSshKey}'
           identity: identityId
         }
+        // One OAuth client, two refresh tokens, and they must stay separate: the
+        // Google Health API 403s a token that also carries the calendar scope.
+        {
+          name: secretNames.googleClientId
+          keyVaultUrl: '${keyVaultUri}secrets/${secretNames.googleClientId}'
+          identity: identityId
+        }
+        {
+          name: secretNames.googleClientSecret
+          keyVaultUrl: '${keyVaultUri}secrets/${secretNames.googleClientSecret}'
+          identity: identityId
+        }
+        {
+          name: secretNames.googleHealthRefresh
+          keyVaultUrl: '${keyVaultUri}secrets/${secretNames.googleHealthRefresh}'
+          identity: identityId
+        }
+        {
+          name: secretNames.googleCalendarRefresh
+          keyVaultUrl: '${keyVaultUri}secrets/${secretNames.googleCalendarRefresh}'
+          identity: identityId
+        }
       ]
     }
     template: {
@@ -105,6 +140,15 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'TZ', value: timeZone }
             { name: 'DAILY_BRIEF_CRON_HOUR', value: string(dailyBriefHour) }
             { name: 'DAILY_BRIEF_CRON_MINUTE', value: string(dailyBriefMinute) }
+            { name: 'WELLNESS_SYNC_LEAD_MIN', value: string(wellnessSyncLeadMin) }
+            // Without these the wellness sync dies every morning on a missing
+            // refresh token and the calendar snapshot silently goes stale — the
+            // agent's only wellness numbers come through this sync.
+            { name: 'GOOGLE_HEALTH_CLIENT_ID', secretRef: secretNames.googleClientId }
+            { name: 'GOOGLE_HEALTH_CLIENT_SECRET', secretRef: secretNames.googleClientSecret }
+            { name: 'GOOGLE_HEALTH_REFRESH_TOKEN', secretRef: secretNames.googleHealthRefresh }
+            { name: 'GOOGLE_CALENDAR_REFRESH_TOKEN', secretRef: secretNames.googleCalendarRefresh }
+            { name: 'GOOGLE_CALENDAR_IDS', value: googleCalendarIds }
             // entrypoint.sh copies this to /root/.ssh and chmods it to 600.
             { name: 'VAULT_SSH_KEY_FILE', value: '/mnt/secrets/id_ed25519' }
           ]

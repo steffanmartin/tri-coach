@@ -44,6 +44,22 @@ az keyvault secret set --vault-name "$KV" -n intervals-api-key  --value "..."
 az keyvault secret set --vault-name "$KV" -n telegram-bot-token --value "123456:ABC..."
 ```
 
+The Google grant, minted on a laptop with `scripts/google_auth.py` (see the
+project README). Two refresh tokens from one client, and they must stay separate
+— the Health API 403s a token that also carries the calendar scope:
+
+```bash
+az keyvault secret set --vault-name "$KV" -n google-health-client-id      --value "....apps.googleusercontent.com"
+az keyvault secret set --vault-name "$KV" -n google-health-client-secret  --value "..."
+az keyvault secret set --vault-name "$KV" -n google-health-refresh-token   --value "1//..."   # --scopes health
+az keyvault secret set --vault-name "$KV" -n google-calendar-refresh-token --value "1//..."   # --scopes calendar
+```
+
+Without these four the container starts fine and the coach answers messages, but
+the 06:45 wellness sync dies on `GOOGLE_HEALTH_REFRESH_TOKEN` every morning and
+the calendar snapshot quietly goes stale — the sync is the agent's only source of
+HRV, resting HR, sleep and steps.
+
 Setting secrets requires **Key Vault Secrets Officer** on the vault for *you* —
 the template grants the app's identity read access, not your user account:
 
@@ -126,3 +142,7 @@ etc.) and the Key Vault secrets from step 3 to already exist.
   Anything the agent had written but not yet pushed is lost on a restart.
 - **Changing a Key Vault secret does not restart the app.** Deploy a new revision
   or restart the current one to pick up a rotated value.
+- **Adding config to the app means editing `app.bicep`, not just `.env`.** The
+  two lists drift silently: a new var in `.env.example` that never reaches the
+  `env` block here fails only on the code path that reads it, which for the
+  wellness sync is once a day at 06:45.
