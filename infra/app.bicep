@@ -24,10 +24,10 @@ param vaultRepo string
 param gitAuthorName string = 'tri-coach'
 param gitAuthorEmail string = 'coach@localhost'
 param timeZone string = 'Europe/Copenhagen'
-// 07:00 here, in .env, and in CLAUDE.md. The wellness sync runs
-// wellnessSyncLeadMin before it, so 06:45.
-param dailyBriefHour int = 7
-param dailyBriefMinute int = 0
+// 06:30 here, in .env, and in CLAUDE.md. The wellness sync runs
+// wellnessSyncLeadMin before it, so 06:15.
+param dailyBriefHour int = 6
+param dailyBriefMinute int = 30
 param wellnessSyncLeadMin int = 15
 
 @description('Calendars snapshotted into 00 Meta/calendar.md. Comma-separated ids, or "primary".')
@@ -176,7 +176,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         // Pinned to exactly one replica, and this is not negotiable: Telegram
         // allows a single getUpdates poller per token, so a second replica makes
         // both replicas fail with 409 Conflict. minReplicas 1 also keeps the
-        // 07:00 APScheduler job alive — scale-to-zero would silently kill it.
+        // 06:30 APScheduler job alive — scale-to-zero would silently kill it.
         minReplicas: 1
         maxReplicas: 1
       }

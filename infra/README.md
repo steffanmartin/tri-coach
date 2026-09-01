@@ -56,7 +56,7 @@ az keyvault secret set --vault-name "$KV" -n google-calendar-refresh-token --val
 ```
 
 Without these four the container starts fine and the coach answers messages, but
-the 06:45 wellness sync dies on `GOOGLE_HEALTH_REFRESH_TOKEN` every morning and
+the 06:15 wellness sync dies on `GOOGLE_HEALTH_REFRESH_TOKEN` every morning and
 the calendar snapshot quietly goes stale — the sync is the agent's only source of
 HRV, resting HR, sleep and steps.
 
@@ -145,4 +145,4 @@ etc.) and the Key Vault secrets from step 3 to already exist.
 - **Adding config to the app means editing `app.bicep`, not just `.env`.** The
   two lists drift silently: a new var in `.env.example` that never reaches the
   `env` block here fails only on the code path that reads it, which for the
-  wellness sync is once a day at 06:45.
+  wellness sync is once a day at 06:15.

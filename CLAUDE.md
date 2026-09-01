@@ -15,7 +15,7 @@ web service — the vault repo *is* the state store.
 ```bash
 docker compose up -d --build          # build + run the bot (the only real "run" path)
 docker compose logs -f
-docker compose exec coach python -m coach.daily_brief   # fire the 07:00 job now, without waiting
+docker compose exec coach python -m coach.daily_brief   # fire the 06:30 job now, without waiting
 docker compose exec coach python -m coach.wellness_sync --days 7   # pull HRV/RHR/sleep now
 docker compose exec coach python -m coach.calendar_sync --dry-run  # see the calendar snapshot
 ```
@@ -45,7 +45,7 @@ Telegram for the bot path, `python -m coach.daily_brief` for the scheduled path.
 
 **One process, two entry points.** `coach/telegram_bot.py:main` starts both the
 polling loop and an in-process `AsyncIOScheduler` that calls `daily_brief.main`
-at 07:00. Deliberate: the container is already always-on, so separate scheduler
+at 06:30. Deliberate: the container is already always-on, so separate scheduler
 infra would be wasted. This also means **the host must not scale to zero** —
 long polling dies with the process.
 
@@ -75,14 +75,16 @@ like any other `00 Meta/` input.
 **Wellness is synced in, not read live.** Coros supplies activities only. All
 four wellness fields — `hrv`, `restingHR`, `sleepSecs`, `steps` — come from a
 Fitbit Air via the Google Health API, and `coach/wellness_sync.py` PUTs them to
-intervals.icu's `wellness-bulk` endpoint ~15 min before the brief. Steps are
-written a day behind: the other three are overnight measurements and final by
-06:15, but today's step count has barely started. The agent is deliberately
-unaware of this: it still reads every number through the intervals MCP, so
-"numbers come from intervals.icu" stays literally true and `daily-readiness` gets
-its 60-day baselines computed by intervals.icu rather than by the model. Writes
-are upserts keyed by date, so re-running a window corrects it. **Do not give the
-agent a second numbers source** — that is the whole point of the sync.
+intervals.icu's `wellness-bulk` endpoint ~15 min before the brief, so 06:15.
+Steps are written a day behind: the other three are overnight measurements and
+final by 06:15, but today's step count has barely started. That leaves the sync
+no margin: if HRV or sleep starts arriving missing, the fix is a later brief, not
+a bigger `WELLNESS_SYNC_LEAD_MIN` — the lead moves the sync *earlier*. The agent
+is deliberately unaware of all this: it still reads every number through the
+intervals MCP, so "numbers come from intervals.icu" stays literally true and
+`daily-readiness` gets its 60-day baselines computed by intervals.icu rather than
+by the model. Writes are upserts keyed by date, so re-running a window corrects
+it. **Do not give the agent a second numbers source** — that is the whole point of the sync.
 
 **The calendar is snapshotted, not queried.** The agent has no Bash and no
 network tools, so `coach/calendar_sync.py` renders the next three weeks of
