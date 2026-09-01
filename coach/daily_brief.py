@@ -1,4 +1,4 @@
-"""07:00 job: read wellness, decide today's session, write the note, ping Telegram."""
+"""06:30 job: read wellness, decide today's session, write the note, ping Telegram."""
 import asyncio
 import os
 from datetime import date
@@ -7,7 +7,12 @@ import httpx
 
 from . import agent, telegram_format
 
-PROMPT = f"""Run the `daily-readiness` skill for {date.today().isoformat()}.
+
+def prompt() -> str:
+    """Built per run, never at import. The scheduler holds this module in memory
+    for months, so a module-level f-string would freeze `date.today()` at
+    container start and every later brief would ask for the startup date."""
+    return f"""Run the `daily-readiness` skill for {date.today().isoformat()}.
 
 Finish with a Telegram-ready summary between <telegram> and </telegram> tags:
 max 8 short lines, no markdown headings, no emoji spam (one status emoji is fine).
@@ -36,9 +41,9 @@ async def send(text: str) -> None:
 
 async def main() -> None:
     try:
-        reply = await agent.run(PROMPT)
+        reply = await agent.run(prompt())
         await send(_extract(reply))
-    except Exception as exc:  # never fail silently at 07:00
+    except Exception as exc:  # never fail silently at 06:30
         await send(f"Coach job failed: {type(exc).__name__}: {exc}")
 
 
