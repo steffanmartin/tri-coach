@@ -127,11 +127,45 @@ Then set these as GitHub Actions repo secrets:
 - `AZURE_SUBSCRIPTION_ID` — `az account show --query id -o tsv`
 
 The workflow reads `acrName`, `acrLoginServer`, `environmentId`, `identityId`,
-and `keyVaultUri` from the `main` deployment's outputs at run time (`az
-deployment group show -n main`), so nothing from step 1 needs to be
+and `keyVaultUri` from the `platform` deployment's outputs at run time (`az
+deployment group show -n platform`), so nothing from step 1 needs to be
 duplicated as a secret. It still expects `infra/app.bicepparam` to carry the
 non-secret config (`intervalsAthleteId`, `telegramAllowedChatId`, `vaultRepo`,
 etc.) and the Key Vault secrets from step 3 to already exist.
+
+## CI infra deploy
+
+A push to `main` that touches `infra/` runs `.github/workflows/infra.yml`
+first, and `deploy.yml` only builds and ships the image once it succeeds — so
+a template change and the code change that depends on it land in one push. A
+push that leaves `infra/` alone skips it entirely; `workflow_dispatch` always
+runs it.
+
+That workflow deploys **`platform.bicep` at resource-group scope**, not
+`main.bicep`: `main.bicep` is subscription-scoped and creates the resource
+group, which the CI identity has no rights to do. The resource group already
+exists, and the deployment is named `platform` — the same name `main.bicep`'s
+module produces — so the outputs stay in exactly one place. `app.bicep` is not
+deployed there; `deploy.yml` still owns it, because it needs the image tag it
+has just built.
+
+It authenticates as the same `tricoach-ci-id` identity (`secrets: inherit`
+passes the three `AZURE_*` secrets through), but Contributor is not enough on
+its own: `platform.bicep` contains four role assignments, and Contributor
+cannot write those. Grant the CI identity RBAC rights on the resource group
+once:
+
+```bash
+az role assignment create \
+  --assignee-object-id "$(az identity show -g rg-tri-coach -n tricoach-ci-id --query principalId -o tsv)" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Role Based Access Control Administrator" \
+  --scope "$(az group show -n rg-tri-coach --query id -o tsv)"
+```
+
+Without it the platform job fails on the first `Microsoft.Authorization/roleAssignments`
+resource with `AuthorizationFailed`, and `deploy.yml` stops before building —
+deliberately, so a half-applied platform never gets a new revision pointed at it.
 
 ## Things that will bite
 

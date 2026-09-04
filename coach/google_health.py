@@ -193,11 +193,18 @@ def daily_steps(token: str, since: date, until: date) -> dict[str, int]:
             return out
 
 
-def wellness_rows(days: int) -> list[dict]:
+def wellness_rows(days: int, include_today_steps: bool = False) -> list[dict]:
     """Rows shaped for intervals.icu's wellness-bulk PUT, newest last.
 
     Days with no measurement are dropped rather than written as nulls: an empty
     row would overwrite whatever is already on that date.
+
+    `include_today_steps` exists because the two scheduled jobs sit on opposite
+    sides of the day. HRV, resting HR and sleep are overnight measurements and
+    are final whenever either job runs, but steps accumulate as the day goes:
+    at 06:00 the count has barely started and writing it would replace a real
+    total with a near-zero, while by the evening debrief it is essentially
+    final. So the morning leaves today's steps alone and the evening writes them.
     """
     days = min(days, MAX_WINDOW_DAYS)
     today = date.today()
@@ -207,10 +214,10 @@ def wellness_rows(days: int) -> list[dict]:
     hrv = daily_hrv(token, since)
     rhr = daily_resting_hr(token, since)
     slept = sleep(token, since)
-    # Steps stop at yesterday. The other three are overnight measurements and are
-    # final by the time this runs, but today's step count has barely started —
-    # writing it would replace a real total with a near-zero until tomorrow's run.
-    stepped = daily_steps(token, since, today)
+    # `daily_steps` takes a closed-open range, so today is only covered when the
+    # caller has asked for it.
+    until = today + timedelta(days=1) if include_today_steps else today
+    stepped = daily_steps(token, since, until)
 
     rows = []
     for day in sorted(set(hrv) | set(rhr) | set(slept) | set(stepped)):
@@ -221,7 +228,7 @@ def wellness_rows(days: int) -> list[dict]:
             row["restingHR"] = rhr[day]
         if day in slept:
             row["sleepSecs"] = slept[day]
-        if day in stepped and day != today.isoformat():
+        if day in stepped and (include_today_steps or day != today.isoformat()):
             row["steps"] = stepped[day]
         if len(row) > 1:
             rows.append(row)

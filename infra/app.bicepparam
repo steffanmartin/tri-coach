@@ -13,4 +13,6 @@ param telegramAllowedChatId = '8679015003'
 param vaultRepo = 'git@github.com:steffanmartin/triathlon-brain.git'
 param timeZone = 'Europe/Copenhagen'
 param dailyBriefHour = 6
-param dailyBriefMinute = 30
+param dailyBriefMinute = 0
+param dailyDebriefHour = 21
+param dailyDebriefMinute = 0

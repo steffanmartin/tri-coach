@@ -1,0 +1,65 @@
+name: Infra
+
+# Deploys the platform half of infra/ — registry, Key Vault, identities, Log
+# Analytics, Container Apps environment (platform.bicep). The container app
+# itself is *not* deployed here: deploy.yml owns app.bicep, because it needs the
+# image tag it has just built. Called by deploy.yml when a push touches infra/,
+# and runnable on its own via workflow_dispatch.
+#
+# Deploys platform.bicep at resource-group scope rather than main.bicep, which
+# is subscription-scoped and creates the resource group: the CI identity is
+# Contributor on rg-tri-coach only and cannot deploy at subscription scope. The
+# resource group already exists, so nothing is lost — and the deployment is
+# named "platform", the same name main.bicep's module produces, so deploy.yml's
+# `az deployment group show -n platform` keeps resolving the outputs either way.
+#
+# platform.bicep's parameter defaults *are* the deployed configuration — `name`
+# matches main.bicepparam and `location` follows the resource group — so there
+# is no bicepparam to pass and no second copy of the values to drift.
+#
+# One-time setup beyond the deploy.yml OIDC secrets: platform.bicep contains
+# four role assignments, and Contributor cannot write those. The CI identity
+# also needs "Role Based Access Control Administrator" on the resource group —
+# see infra/README.md.
+
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: rg-tri-coach
+
+jobs:
+  platform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Best-effort: this only writes the pending changes into the run log so a
+      # surprising infra diff is visible before it is applied. Never blocks.
+      - name: What-if
+        continue-on-error: true
+        run: |
+          az deployment group what-if \
+            -g "$RESOURCE_GROUP" \
+            -n platform \
+            -f infra/platform.bicep
+
+      - name: Deploy platform
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            -g "$RESOURCE_GROUP" \
+            -n platform \
+            -f infra/platform.bicep

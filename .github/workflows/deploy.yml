@@ -6,6 +6,12 @@ name: Deploy
 # ACR that main.bicep created, then re-deploys app.bicep with the new
 # imageTag. activeRevisionsMode: Single means the new revision replaces the
 # old one automatically — that's the "reload".
+#
+# When the push touches infra/, infra.yml runs first and re-deploys the
+# platform resources, so the outputs this workflow resolves below are the ones
+# the new templates just produced rather than the previous deployment's. It is
+# a separate workflow, called with `secrets: inherit` so it authenticates as
+# the same CI managed identity over OIDC — no second credential.
 
 on:
   push:
@@ -20,7 +26,58 @@ env:
   RESOURCE_GROUP: rg-tri-coach
 
 jobs:
+  # Which parts of the push need to run. deploy.yml has no `paths:` filter —
+  # every push to main ships the app — so the infra decision is made here,
+  # per-run, from the pushed range. A manual dispatch has no range to diff and
+  # deploys everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect infra changes
+        id: filter
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A branch's first push, or a force-push that dropped the old tip,
+          # leaves nothing usable in `before` — fall back to the parent commit,
+          # and to deploying infra if even that is missing.
+          base="${{ github.event.before }}"
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base="$(git rev-parse --verify --quiet '${{ github.sha }}^' || true)"
+          fi
+          if [ -z "$base" ]; then
+            infra=true
+          elif git diff --name-only "$base" "${{ github.sha }}" | grep -q '^infra/'; then
+            infra=true
+          else
+            infra=false
+          fi
+          echo "infra=$infra" >> "$GITHUB_OUTPUT"
+          echo "infra changed: $infra" >> "$GITHUB_STEP_SUMMARY"
+
+  # platform.bicep only — app.bicep is deployed below, with the tag built here.
+  # Redeploying platform is idempotent, so a push that only touches app.bicep
+  # passes through this as a no-op rather than needing a finer-grained filter.
+  infra:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    uses: ./.github/workflows/infra.yml
+    secrets: inherit
+
   deploy:
+    needs: [changes, infra]
+    # `infra` is skipped on an app-only push, which would skip this job too
+    # without an explicit condition. Run unless something actually failed.
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,9 +89,10 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Read straight from the main.bicep deployment record instead of
+      # Read straight from the platform deployment record instead of
       # duplicating these as repo secrets — they're not sensitive and this
-      # keeps the workflow in sync if platform.bicep is ever redeployed.
+      # keeps the workflow in sync when the infra job above has just
+      # redeployed platform.bicep.
       - name: Resolve platform outputs
         id: platform
         run: |

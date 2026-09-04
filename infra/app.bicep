@@ -24,11 +24,23 @@ param vaultRepo string
 param gitAuthorName string = 'tri-coach'
 param gitAuthorEmail string = 'coach@localhost'
 param timeZone string = 'Europe/Copenhagen'
-// 06:30 here, in .env, and in CLAUDE.md. The wellness sync runs
-// wellnessSyncLeadMin before it, so 06:15.
+// When the morning job starts polling for the night's wellness — it briefs as
+// soon as HRV, resting HR and sleep publish, and gives up at the deadline.
+// Keep these in step with .env.example and CLAUDE.md.
 param dailyBriefHour int = 6
-param dailyBriefMinute int = 30
-param wellnessSyncLeadMin int = 15
+param dailyBriefMinute int = 0
+param dailyBriefDeadlineHour int = 9
+param dailyBriefDeadlineMinute int = 0
+param wellnessPollIntervalMin int = 10
+
+// When the evening debrief starts polling intervals.icu for the day's activities
+// to upload, and when it gives up. This job writes the daily note; the brief
+// does not. Keep these in step with .env.example and CLAUDE.md.
+param dailyDebriefHour int = 21
+param dailyDebriefMinute int = 0
+param dailyDebriefDeadlineHour int = 23
+param dailyDebriefDeadlineMinute int = 0
+param activityPollIntervalMin int = 10
 
 @description('Calendars snapshotted into 00 Meta/calendar.md. Comma-separated ids, or "primary".')
 param googleCalendarIds string = 'primary'
@@ -140,7 +152,14 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'TZ', value: timeZone }
             { name: 'DAILY_BRIEF_CRON_HOUR', value: string(dailyBriefHour) }
             { name: 'DAILY_BRIEF_CRON_MINUTE', value: string(dailyBriefMinute) }
-            { name: 'WELLNESS_SYNC_LEAD_MIN', value: string(wellnessSyncLeadMin) }
+            { name: 'DAILY_BRIEF_DEADLINE_HOUR', value: string(dailyBriefDeadlineHour) }
+            { name: 'DAILY_BRIEF_DEADLINE_MINUTE', value: string(dailyBriefDeadlineMinute) }
+            { name: 'WELLNESS_POLL_INTERVAL_MIN', value: string(wellnessPollIntervalMin) }
+            { name: 'DAILY_DEBRIEF_CRON_HOUR', value: string(dailyDebriefHour) }
+            { name: 'DAILY_DEBRIEF_CRON_MINUTE', value: string(dailyDebriefMinute) }
+            { name: 'DAILY_DEBRIEF_DEADLINE_HOUR', value: string(dailyDebriefDeadlineHour) }
+            { name: 'DAILY_DEBRIEF_DEADLINE_MINUTE', value: string(dailyDebriefDeadlineMinute) }
+            { name: 'ACTIVITY_POLL_INTERVAL_MIN', value: string(activityPollIntervalMin) }
             // Without these the wellness sync dies every morning on a missing
             // refresh token and the calendar snapshot silently goes stale — the
             // agent's only wellness numbers come through this sync.

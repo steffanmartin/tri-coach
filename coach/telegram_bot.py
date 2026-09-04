@@ -1,4 +1,4 @@
-"""Always-on Telegram bot (long polling) + in-process cron for the daily brief."""
+"""Always-on Telegram bot (long polling) + in-process cron for the daily jobs."""
 import logging
 import os
 
@@ -7,7 +7,7 @@ from telegram import MessageEntity, Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from . import agent, daily_brief, telegram_format, vault, wellness_sync
+from . import agent, daily_brief, daily_debrief, telegram_format, vault
 
 logging.basicConfig(level=logging.INFO)
 ALLOWED = str(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
@@ -45,6 +45,11 @@ async def cmd_debrief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _ask(update, context, "Run the `session-debrief` skill on my latest activity.")
 
 
+async def cmd_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The whole day, not one session — the same skill the 21:00 job runs."""
+    await _ask(update, context, "Run the `daily-debrief` skill for today.")
+
+
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _ask(
         update, context,
@@ -56,17 +61,29 @@ def main() -> None:
     vault.ensure_clone()
 
     scheduler = AsyncIOScheduler(timezone=os.environ.get("TZ", "Europe/Copenhagen"))
-    brief_hour = int(os.environ.get("DAILY_BRIEF_CRON_HOUR", 6))
-    brief_minute = int(os.environ.get("DAILY_BRIEF_CRON_MINUTE", 30))
 
-    # Wellness lands before the brief reads it. The 7-day window is not just for
-    # today: Fitbit revises a night's HRV after the fact, and the upsert picks
-    # those corrections up.
-    lead = (brief_hour * 60 + brief_minute) - int(os.environ.get("WELLNESS_SYNC_LEAD_MIN", 15))
+    # This is when the brief starts *looking*, not when it sends. The job polls
+    # Google Health for the night's HRV, resting HR and sleep, syncs them into
+    # intervals.icu and briefs as soon as they are all there — so the message
+    # arrives on the morning the watch actually uploaded, rather than at a fixed
+    # time that a late sync misses. See daily_brief for the deadline.
     scheduler.add_job(
-        wellness_sync.main, "cron", hour=(lead // 60) % 24, minute=lead % 60
+        daily_brief.main,
+        "cron",
+        hour=int(os.environ.get("DAILY_BRIEF_CRON_HOUR", 6)),
+        minute=int(os.environ.get("DAILY_BRIEF_CRON_MINUTE", 0)),
     )
-    scheduler.add_job(daily_brief.main, "cron", hour=brief_hour, minute=brief_minute)
+
+    # Same shape at the other end of the day: this is when the debrief starts
+    # looking for the day's activities to finish uploading from Coros, not when
+    # it sends. It writes the day's `20 Daily/` note — the morning brief does
+    # not — so if this job stops running, the vault stops gaining daily notes.
+    scheduler.add_job(
+        daily_debrief.main,
+        "cron",
+        hour=int(os.environ.get("DAILY_DEBRIEF_CRON_HOUR", 21)),
+        minute=int(os.environ.get("DAILY_DEBRIEF_CRON_MINUTE", 0)),
+    )
 
     # AsyncIOScheduler.start() needs a running loop, which doesn't exist yet in
     # this synchronous main() — post_init runs inside the loop run_polling creates.
@@ -82,6 +99,7 @@ def main() -> None:
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("week", cmd_week))
     app.add_handler(CommandHandler("debrief", cmd_debrief))
+    app.add_handler(CommandHandler("day", cmd_day))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
 

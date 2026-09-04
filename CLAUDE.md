@@ -15,7 +15,8 @@ web service — the vault repo *is* the state store.
 ```bash
 docker compose up -d --build          # build + run the bot (the only real "run" path)
 docker compose logs -f
-docker compose exec coach python -m coach.daily_brief   # fire the 06:30 job now, without waiting
+docker compose exec coach python -m coach.daily_brief --no-wait  # brief now, don't wait for wellness
+docker compose exec coach python -m coach.daily_debrief --no-wait # debrief now, don't wait for uploads
 docker compose exec coach python -m coach.wellness_sync --days 7   # pull HRV/RHR/sleep now
 docker compose exec coach python -m coach.calendar_sync --dry-run  # see the calendar snapshot
 ```
@@ -39,15 +40,19 @@ uv run python -m coach.telegram_bot
 ```
 
 There is no test suite, linter, or CI. Verification is manual: `/status` in
-Telegram for the bot path, `python -m coach.daily_brief` for the scheduled path.
+Telegram for the bot path, `python -m coach.daily_brief --no-wait` and
+`python -m coach.daily_debrief --no-wait` for the scheduled paths (drop the flag
+to exercise the polling wait itself). The debrief is the one that writes to the
+vault, so a successful run leaves a commit behind.
 
 ## Architecture
 
-**One process, two entry points.** `coach/telegram_bot.py:main` starts both the
-polling loop and an in-process `AsyncIOScheduler` that calls `daily_brief.main`
-at 06:30. Deliberate: the container is already always-on, so separate scheduler
-infra would be wasted. This also means **the host must not scale to zero** —
-long polling dies with the process.
+**One process, three entry points.** `coach/telegram_bot.py:main` starts the
+polling loop and an in-process `AsyncIOScheduler` holding two cron jobs:
+`daily_brief.main` at 06:00 and `daily_debrief.main` at 21:00. Deliberate: the
+container is already always-on, so separate scheduler infra would be wasted. This
+also means **the host must not scale to zero** — long polling dies with the
+process, and with it both jobs.
 
 **Every request funnels through `agent.run`** (`coach/agent.py`), which is the
 only place the SDK is touched. It wraps each turn in `vault.pull()` before and
@@ -61,7 +66,7 @@ agent re-reading the vault.
 `./.claude` to `/vault/.claude`. So the skills in `.claude/skills/` are loaded
 from *inside the vault* at runtime. Changing coaching logic means editing a
 SKILL.md, not the Python. The Telegram commands are thin: `/today`, `/week`,
-`/debrief` are one-line prompts that just name a skill.
+`/debrief`, `/day` are one-line prompts that just name a skill.
 
 **Vault folder ownership is a hard contract**, enforced in `SYSTEM_PROMPT` and
 mirrored in the skills. The agent writes only `10 Plan/`, `20 Daily/`,
@@ -75,16 +80,66 @@ like any other `00 Meta/` input.
 **Wellness is synced in, not read live.** Coros supplies activities only. All
 four wellness fields — `hrv`, `restingHR`, `sleepSecs`, `steps` — come from a
 Fitbit Air via the Google Health API, and `coach/wellness_sync.py` PUTs them to
-intervals.icu's `wellness-bulk` endpoint ~15 min before the brief, so 06:15.
-Steps are written a day behind: the other three are overnight measurements and
-final by 06:15, but today's step count has barely started. That leaves the sync
-no margin: if HRV or sleep starts arriving missing, the fix is a later brief, not
-a bigger `WELLNESS_SYNC_LEAD_MIN` — the lead moves the sync *earlier*. The agent
-is deliberately unaware of all this: it still reads every number through the
-intervals MCP, so "numbers come from intervals.icu" stays literally true and
-`daily-readiness` gets its 60-day baselines computed by intervals.icu rather than
-by the model. Writes are upserts keyed by date, so re-running a window corrects
-it. **Do not give the agent a second numbers source** — that is the whole point of the sync.
+intervals.icu's `wellness-bulk` endpoint. Both scheduled jobs call it, and they
+differ on one field: steps. HRV, resting HR and sleep are overnight measurements
+and are final whenever either job runs, but steps accumulate through the day, so
+at 06:00 writing today's would replace a real total with a near-zero. The morning
+therefore skips today's steps and the evening debrief writes them
+(`include_today_steps`). The agent is deliberately unaware of all this: it still reads every
+number through the intervals MCP, so "numbers come from intervals.icu" stays
+literally true and `daily-readiness` gets its 60-day baselines computed by
+intervals.icu rather than by the model. Writes are upserts keyed by date, so
+re-running a window corrects it. **Do not give the agent a second numbers
+source** — that is the whole point of the sync.
+
+**The brief waits for the data instead of guessing when it lands.** There is no
+fixed 06:30 send and no sync-runs-N-minutes-earlier lead any more; both were bets
+on the watch having uploaded by a certain clock time, and a late Fitbit sync used
+to hand `daily-readiness` a night that did not exist yet. `daily_brief.main` now
+starts at `DAILY_BRIEF_CRON_HOUR/MINUTE` (06:00), polls Google Health every
+`WELLNESS_POLL_INTERVAL_MIN` (10) for today's `hrv`, `restingHR` and `sleepSecs`,
+and the moment all three are published runs `wellness_sync` and then the brief.
+At `DAILY_BRIEF_DEADLINE_HOUR/MINUTE` (09:00) it stops waiting and briefs anyway,
+passing the missing field names into the prompt so the agent says what is absent
+rather than grading around it — a late brief is worse than an honest one. Two
+things to keep straight when editing this: it polls **Google Health, not
+intervals.icu**, because intervals only holds these numbers once our own sync
+writes them, so polling it would be watching our own writes; and a failed poll is
+logged and retried, never raised, so one Google 500 at 06:10 does not cost the
+day's brief. Steps are excluded from the wait on purpose — the morning does not
+write them, so waiting on them would wait forever.
+
+**The debrief closes the day, and owns the daily note.** `daily_debrief.main` is
+the same shape at the other end of the day: it starts at
+`DAILY_DEBRIEF_CRON_HOUR/MINUTE` (21:00), polls every
+`ACTIVITY_POLL_INTERVAL_MIN` (10) until every planned session for today has an
+activity recorded against it, and at `DAILY_DEBRIEF_DEADLINE_HOUR/MINUTE` (23:00)
+runs anyway with the count of what never uploaded passed into the prompt. It then
+debriefs each activity into `30 Sessions/` and writes `20 Daily/YYYY-MM-DD.md`.
+The wait loop itself is shared with the brief — `coach/polling.py:poll_until` —
+so the retry, deadline and never-sleep-past-it behaviour cannot drift between
+them. Here it polls **intervals.icu**, which is not a contradiction of the
+morning polling Google Health: wellness is in intervals.icu only because our sync
+put it there, whereas activities come from Coros and are genuinely upstream of
+us. `coach/intervals.py` is that read path, and it exists only to let a scheduled
+job decide whether waking the agent is worth it — it is not a second numbers
+source for the agent, which still reads everything through the MCP. Planned
+events are narrowed to Run/Ride/Swim (`intervals.TRACKED_SPORTS`) because gym and
+mobility never produce an upload and would otherwise hold every night at the
+deadline. Note `coach/intervals.py` also sidesteps the intervals MCP's
+`get_calendar_events`, which has been failing on a `T00:00:00` parse bug.
+
+**The daily note is written once, in the evening.** `20 Daily/YYYY-MM-DD.md` used
+to be written at 06:00 by `daily-readiness`, which meant the vault's record of a
+day was a prediction that nothing ever reconciled — and `30 Sessions/` never got
+written to at all. Now `daily-debrief` is the sole writer of both, and
+`daily-readiness` writes nothing to the vault: **do not restore its `20 Daily/`
+write**, or the two jobs will fight over one file. The cost of this is that the
+morning's reasoning prose is not archived; what survives is the Telegram message
+and, when a session was changed, the `COACH:` note `daily-readiness` puts on the
+intervals.icu event description. That note is now load-bearing — it is what the
+evening reads to judge execution against what was actually prescribed, rather
+than against the untouched plan.
 
 **The calendar is snapshotted, not queried.** The agent has no Bash and no
 network tools, so `coach/calendar_sync.py` renders the next three weeks of
@@ -104,7 +159,7 @@ The Google Health API allowlists its own scopes and 403s any token that also
 carries the calendar scope, so merging the two grants silently breaks wellness
 while calendar keeps working. `coach/google_oauth.py` is the shared exchange.
 
-**Model split is intentional**: `COACH_MODEL` (Sonnet) for the ~365 daily runs,
+**Model split is intentional**: `COACH_MODEL` (Sonnet) for the ~730 scheduled runs a year,
 `PLANNER_MODEL` (Opus) passed explicitly for `plan-architect`, which runs a
 handful of times a season. `agent.run(prompt, model=...)` is the seam.
 
@@ -118,6 +173,9 @@ front. The macro plan holds block structure; `week-planner` fills in sessions.
   prompt and repeated in the skills — keep it there when editing either.
 - **Never delete an intervals.icu calendar event.** Move it or rewrite its
   description, and record the change in the day's note.
+- **`20 Daily/` and `30 Sessions/` are written by `daily-debrief` at 21:00, and by
+  nothing else.** One note per date, written after the day, not before it.
+  `daily-readiness` must stay a Telegram-only job.
 - **Medical escalation is not optional.** Sharp/localised pain, fever, or three
   consecutive red readiness days ends prescription and routes to a physio/GP.
 - **Auth is a single chat-ID check** (`telegram_bot._authorised`). It is the only

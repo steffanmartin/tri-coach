@@ -55,9 +55,15 @@ Guardrails:
 
 ## 4. Write and act
 
-1. Write `20 Daily/YYYY-MM-DD.md` from `20 Daily/_template.md`. Fill the
-   frontmatter fully — it feeds the Dataview charts.
+1. **Do not write `20 Daily/`.** The daily note is written once, at the end of
+   the day, by the `daily-debrief` skill — a note written at 06:00 describes a
+   day that has not happened yet, and two writers on one file would fight.
 2. If the session changed, update the intervals.icu calendar event description
    with a one-line `COACH:` note explaining the change. Never delete an event.
+   This matters more than it used to: that description is now the **only**
+   durable record of this morning's decision, and it is what the evening debrief
+   reads to judge execution against what was actually prescribed. If you changed
+   a session and did not manage to write the note, say so in the `<telegram>`
+   block so the change is not silently lost.
 3. Emit the `<telegram>` block: verdict, the numbers that drove it, the session
    as it now stands, and one sentence of why. Eight lines maximum.
