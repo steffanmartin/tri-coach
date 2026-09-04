@@ -94,6 +94,14 @@ def extract_telegram(reply: str) -> str:
     return reply[:1500]
 
 
+def header(label: str) -> str:
+    """Bold '<label> Thu 04/09' line, built in code rather than asked of the
+    model so the date/weekday can never drift or come out mis-formatted.
+    `**` is real Markdown, which `telegram_format.text_chunks` turns into a
+    bold entity — shared by `daily_brief` and `daily_debrief`."""
+    return f"**{label} {date.today().strftime('%a %d/%m')}**"
+
+
 async def send(text: str) -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     async with httpx.AsyncClient(timeout=30) as client:
@@ -118,7 +126,7 @@ async def main(wait: bool = True) -> None:
         # own failures to Telegram, so a dead sync leaves the brief standing.
         await wellness_sync.main()
         reply = await agent.run(prompt(missing))
-        await send(extract_telegram(reply))
+        await send(f"{header('Brief')}\n{extract_telegram(reply)}")
     except Exception as exc:  # never fail silently in the morning
         await send(f"Coach job failed: {type(exc).__name__}: {exc}")
 

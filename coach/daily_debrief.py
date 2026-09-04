@@ -101,7 +101,8 @@ async def main(wait: bool = True) -> None:
         # failures to Telegram, so a dead sync leaves the debrief standing.
         await wellness_sync.main(include_today_steps=True)
         reply = await agent.run(prompt(unlogged))
-        await daily_brief.send(daily_brief.extract_telegram(reply))
+        header = daily_brief.header("De-brief")
+        await daily_brief.send(f"{header}\n{daily_brief.extract_telegram(reply)}")
     except Exception as exc:  # never fail silently
         await daily_brief.send(f"Coach debrief failed: {type(exc).__name__}: {exc}")
 
