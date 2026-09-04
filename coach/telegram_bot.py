@@ -3,7 +3,7 @@ import logging
 import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import MessageEntity, Update
+from telegram import BotCommand, MessageEntity, Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -34,7 +34,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _ask(update, context, "Run the `daily-readiness` skill for today.")
+    await _ask(update, context, "Run the `daily-brief` skill for today.")
 
 
 async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -87,8 +87,18 @@ def main() -> None:
 
     # AsyncIOScheduler.start() needs a running loop, which doesn't exist yet in
     # this synchronous main() — post_init runs inside the loop run_polling creates.
-    async def _start_scheduler(_: Application) -> None:
+    async def _start_scheduler(app: Application) -> None:
         scheduler.start()
+        # Populates Telegram's "/" autocomplete menu with these commands and
+        # descriptions; without it the handlers still work but are invisible
+        # until typed from memory.
+        await app.bot.set_my_commands([
+            BotCommand("today", "Morning readiness check + today's session"),
+            BotCommand("week", "Plan or rebalance this week"),
+            BotCommand("debrief", "How did that session go"),
+            BotCommand("day", "Close out today's training"),
+            BotCommand("status", "CTL/ATL/TSB and weeks to race"),
+        ])
 
     app = (
         Application.builder()

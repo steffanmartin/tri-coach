@@ -25,7 +25,7 @@ from . import agent, google_health, polling, telegram_format, wellness_sync
 
 log = logging.getLogger(__name__)
 
-# The three overnight measurements `daily-readiness` grades against. Steps are
+# The three overnight measurements `daily-brief` grades against. Steps are
 # not here on purpose: this job never writes today's steps (the evening debrief
 # does, once the count is final), so waiting on them would wait forever.
 REQUIRED_FIELDS = ("hrv", "restingHR", "sleepSecs")
@@ -45,7 +45,7 @@ def prompt(missing: list[str] | None = None) -> str:
             "line, grade readiness on what does exist, and do not infer the "
             "missing numbers or fall back to an older day's.\n"
         )
-    return f"""Run the `daily-readiness` skill for {date.today().isoformat()}.
+    return f"""Run the `daily-brief` skill for {date.today().isoformat()}.
 {gap}
 Finish with a Telegram-ready summary between <telegram> and </telegram> tags:
 max 8 short lines, no markdown headings, no emoji spam (one status emoji is fine).

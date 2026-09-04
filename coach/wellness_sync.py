@@ -2,7 +2,7 @@
 
 Runs shortly before the daily brief. The agent is untouched by this: it keeps
 reading wellness through the intervals MCP exactly as before, and
-`daily-readiness` keeps getting its 60-day baselines computed by intervals.icu
+`daily-brief` keeps getting its 60-day baselines computed by intervals.icu
 rather than by the model.
 
 Writes are upserts keyed by date, so re-running any window is safe and is the

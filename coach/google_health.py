@@ -126,7 +126,7 @@ def sleep(token: str, since: date) -> dict[str, int]:
 
     Naps are excluded: Fitbit flags the overnight session as `mainSleep`, and
     folding daytime sleep into the same figure would inflate the number
-    `daily-readiness` grades against its 7-hour threshold.
+    `daily-brief` grades against its 7-hour threshold.
     """
     out: dict[str, int] = {}
     for point in _walk("sleep", token, 25):  # sleep pages cap at 25; 1 returns nothing

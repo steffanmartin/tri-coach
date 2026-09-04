@@ -50,10 +50,10 @@ def activities(day: date) -> list[dict]:
 def planned_workouts(day: date) -> list[dict]:
     """Planned calendar events for `day`, narrowed to sports that upload a file.
 
-    Note this hits the REST API directly rather than the intervals MCP, whose
-    `get_calendar_events` tool has been failing with "unconverted data remains:
-    T00:00:00" since 31 Aug. That is a date-parsing bug in the MCP wrapper, not
-    in the API, so this path is unaffected by it.
+    Note this hits the REST API directly rather than going through the intervals
+    MCP. That is not a workaround: this runs inside the polling loop, before
+    there is an agent turn to host an MCP tool call at all. It stays REST even
+    though the MCP's calendar tools work again (see the patch in the Dockerfile).
     """
     stamp = day.isoformat()
     events = _get("/events", oldest=stamp, newest=stamp, category="WORKOUT")

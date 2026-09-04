@@ -5,7 +5,7 @@ description: Close out the day — what was actually trained, how it went agains
 
 # Daily debrief
 
-This runs at the end of the day, not the start. `daily-readiness` predicts;
+This runs at the end of the day, not the start. `daily-brief` predicts;
 this records. It is also the **only** writer of `20 Daily/YYYY-MM-DD.md` — the
 morning brief no longer writes one, so if you skip step 3 the day has no note.
 
@@ -40,7 +40,7 @@ same as a missing measurement, so say which it is.
 - `## Verdict` — the day in two or three sentences, in hindsight. Was the day's
   training what the week needed?
 - `## Signals` — this morning's wellness numbers against their baselines, plus
-  today's steps. Same 7-day vs 60-day framing `daily-readiness` uses.
+  today's steps. Same 7-day vs 60-day framing `daily-brief` uses.
 - `## Planned vs actual` — the plan's session, the prescription as it stood
   after any morning change (the `COACH:` note), and what was actually done.
   Name the gap plainly when there is one.
@@ -54,7 +54,7 @@ One note per date. On a re-run, rewrite it rather than appending a second copy.
 Say what tomorrow morning needs to know: a key session missed, a session that
 ran far harder or longer than it was billed, a pain report, a wellness or
 load number that does not look real. Put it in the `## Change log` so
-`daily-readiness` picks it up when it reads back the last 7 days.
+`daily-brief` picks it up when it reads back the last 7 days.
 
 Escalation is not optional and does not soften in the evening: sharp or
 localised pain, fever, or three consecutive red readiness days means "see a

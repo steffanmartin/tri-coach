@@ -32,12 +32,26 @@ uv run python -m coach.wellness_sync --days 90            # backfill
 
 Local runs need every var in `.env.example` exported, plus `VAULT_PATH` pointed
 at a real cloned vault and the `claude` CLI + `uv` on PATH (the Dockerfile
-installs both; the SDK shells out to the CLI, and `uvx` launches the intervals MCP):
+installs both; the SDK shells out to the CLI):
 
 ```bash
 uv sync
+# Once: the intervals MCP is a build-time install in Docker, not a `uvx` fetch at
+# runtime, so a local checkout needs the same pinned+patched copy on PATH. Keep
+# this in step with the Dockerfile — it is the same package, rev and patch.
+uv tool install --with "fastmcp<3" \
+  "intervals-icu-mcp @ git+https://github.com/eddmann/intervals-icu-mcp@cb91d4a"
+f="$(uv tool dir)"/intervals-icu-mcp/lib/python*/site-packages/intervals_icu_mcp/tools/events.py
+sed -i '' -E 's/datetime\.strptime\((date|workout\.start_date_local), "%Y-%m-%d"\)/datetime.fromisoformat(\1)/' $f
+# `sed -E` is the one form that means the same thing to BSD and GNU sed; the BRE
+# spelling silently no-ops on macOS. Same check the Dockerfile makes.
+! grep -q 'strptime(date\|strptime(workout' $f || echo "PATCH DID NOT APPLY"
+
 uv run python -m coach.telegram_bot
 ```
+
+Only `agent.run` talks to the MCP, so `wellness_sync`, `calendar_sync` and the
+debrief's polling all work locally without that install.
 
 There is no test suite, linter, or CI. Verification is manual: `/status` in
 Telegram for the bot path, `python -m coach.daily_brief --no-wait` and
@@ -87,7 +101,7 @@ at 06:00 writing today's would replace a real total with a near-zero. The mornin
 therefore skips today's steps and the evening debrief writes them
 (`include_today_steps`). The agent is deliberately unaware of all this: it still reads every
 number through the intervals MCP, so "numbers come from intervals.icu" stays
-literally true and `daily-readiness` gets its 60-day baselines computed by
+literally true and `daily-brief` gets its 60-day baselines computed by
 intervals.icu rather than by the model. Writes are upserts keyed by date, so
 re-running a window corrects it. **Do not give the agent a second numbers
 source** — that is the whole point of the sync.
@@ -95,7 +109,7 @@ source** — that is the whole point of the sync.
 **The brief waits for the data instead of guessing when it lands.** There is no
 fixed 06:30 send and no sync-runs-N-minutes-earlier lead any more; both were bets
 on the watch having uploaded by a certain clock time, and a late Fitbit sync used
-to hand `daily-readiness` a night that did not exist yet. `daily_brief.main` now
+to hand `daily-brief` a night that did not exist yet. `daily_brief.main` now
 starts at `DAILY_BRIEF_CRON_HOUR/MINUTE` (06:00), polls Google Health every
 `WELLNESS_POLL_INTERVAL_MIN` (10) for today's `hrv`, `restingHR` and `sleepSecs`,
 and the moment all three are published runs `wellness_sync` and then the brief.
@@ -126,17 +140,17 @@ job decide whether waking the agent is worth it — it is not a second numbers
 source for the agent, which still reads everything through the MCP. Planned
 events are narrowed to Run/Ride/Swim (`intervals.TRACKED_SPORTS`) because gym and
 mobility never produce an upload and would otherwise hold every night at the
-deadline. Note `coach/intervals.py` also sidesteps the intervals MCP's
-`get_calendar_events`, which has been failing on a `T00:00:00` parse bug.
+deadline. `coach/intervals.py` uses REST rather than the MCP because it runs
+inside the polling loop, before there is an agent turn to host a tool call.
 
 **The daily note is written once, in the evening.** `20 Daily/YYYY-MM-DD.md` used
-to be written at 06:00 by `daily-readiness`, which meant the vault's record of a
+to be written at 06:00 by `daily-brief`, which meant the vault's record of a
 day was a prediction that nothing ever reconciled — and `30 Sessions/` never got
 written to at all. Now `daily-debrief` is the sole writer of both, and
-`daily-readiness` writes nothing to the vault: **do not restore its `20 Daily/`
+`daily-brief` writes nothing to the vault: **do not restore its `20 Daily/`
 write**, or the two jobs will fight over one file. The cost of this is that the
 morning's reasoning prose is not archived; what survives is the Telegram message
-and, when a session was changed, the `COACH:` note `daily-readiness` puts on the
+and, when a session was changed, the `COACH:` note `daily-brief` puts on the
 intervals.icu event description. That note is now load-bearing — it is what the
 evening reads to judge execution against what was actually prescribed, rather
 than against the untouched plan.
@@ -175,7 +189,7 @@ front. The macro plan holds block structure; `week-planner` fills in sessions.
   description, and record the change in the day's note.
 - **`20 Daily/` and `30 Sessions/` are written by `daily-debrief` at 21:00, and by
   nothing else.** One note per date, written after the day, not before it.
-  `daily-readiness` must stay a Telegram-only job.
+  `daily-brief` must stay a Telegram-only job.
 - **Medical escalation is not optional.** Sharp/localised pain, fever, or three
   consecutive red readiness days ends prescription and routes to a physio/GP.
 - **Auth is a single chat-ID check** (`telegram_bot._authorised`). It is the only

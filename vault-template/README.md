@@ -60,6 +60,6 @@ generates the detailed week, one week at a time.
 ### `20 Daily/_template.md`
 The skeleton every daily note is built from: frontmatter for the graded signals
 (HRV, RHR, sleep, CTL/ATL/TSB, readiness colour, planned vs. prescribed) and the
-Verdict / Signals / Today's session / Change log headings. `daily-readiness` reads
+Verdict / Signals / Today's session / Change log headings. `daily-brief` reads
 this file at write time, so keep it in the vault and keep the keys stable if you
 edit it.

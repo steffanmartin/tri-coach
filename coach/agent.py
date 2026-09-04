@@ -33,19 +33,12 @@ def _intervals_mcp() -> dict:
     """intervals.icu MCP over stdio. Swap for {"type":"http","url":...} if hosted."""
     return {
         "intervals": {
-            "command": "uvx",
-            "args": [
-                "--from",
-                "git+https://github.com/eddmann/intervals-icu-mcp",
-                # Pinned below its own stated floor (fastmcp>=2.12.4): fastmcp 3.x
-                # made Context.get_state async, but this package's middleware and
-                # every tool still call it unawaited, so every tool call dies with
-                # "'coroutine' object has no attribute ...". 2.x is what its code
-                # actually matches.
-                "--with",
-                "fastmcp<3",
-                "intervals-icu-mcp",
-            ],
+            # Installed by the Dockerfile (`uv tool install`, pinned rev, plus a
+            # patch for an upstream date-parsing bug) rather than fetched here by
+            # `uvx`, so the version the agent talks to is fixed at build time.
+            # Local runs need that same install once — see CLAUDE.md.
+            "command": "intervals-icu-mcp",
+            "args": [],
             # eddmann/intervals-icu-mcp reads its own env var names (see its
             # ICUConfig in auth.py) — not the plain INTERVALS_* this app uses
             # elsewhere (.env.example, app.bicep) — hence the remap here.

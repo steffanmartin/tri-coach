@@ -1,9 +1,9 @@
 ---
-name: daily-readiness
+name: daily-brief
 description: Assess this morning's readiness from HRV, RHR, sleep and training load, then confirm or modify today's planned session. Use for the daily brief, /today, or any "how should I train today" question.
 ---
 
-# Daily readiness
+# Daily brief
 
 ## 1. Gather (never skip, never guess)
 

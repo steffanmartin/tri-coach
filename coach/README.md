@@ -64,7 +64,7 @@ Failures are sent to Telegram, never swallowed. Runnable by hand:
 **`daily_debrief.py`** — 21:00. Polls intervals.icu until every planned session
 for today has an activity recorded, then debriefs each one into `30 Sessions/`
 and writes the day's `20 Daily/` note. It is the **only** writer of the daily
-note — `daily-readiness` no longer writes one, because a note written at 06:00
+note — `daily-brief` no longer writes one, because a note written at 06:00
 describes a day that has not happened. At 23:00 it stops waiting and says what
 never uploaded rather than guessing whether the session happened. Runnable by
 hand: `python -m coach.daily_debrief --no-wait`.
@@ -84,8 +84,9 @@ last poll lands exactly on it.
 is worth waking the agent; it is deliberately not a general client, since a
 second numbers source is what the wellness sync exists to prevent. Planned events
 are narrowed to Run/Ride/Swim, because gym and mobility never produce an upload
-and would hold the poll at the deadline every night. It bypasses the intervals
-MCP, whose `get_calendar_events` tool has been failing on a date-parsing bug.
+and would hold the poll at the deadline every night. It goes to REST rather than
+through the intervals MCP because it runs before there is an agent turn to host
+an MCP tool call.
 
 **`wellness_sync.py`** — reads days from `google_health` and PUTs them to
 intervals.icu's `wellness-bulk` endpoint. Both scheduled jobs call it. Writes are
