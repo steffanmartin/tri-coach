@@ -44,10 +44,19 @@ def access_token(refresh_var: str) -> str:
     )
     if resp.status_code == 400 and "invalid_grant" in resp.text:
         raise RuntimeError(
-            f"Google refused {refresh_var} (invalid_grant). Usual cause: the "
-            "OAuth app is back in 'Testing' publishing status, which expires "
-            "refresh tokens after 7 days. Publish it, then re-run "
-            "scripts/google_auth.py for this scope set."
+            f"Google refused {refresh_var} (invalid_grant) — the grant was "
+            "revoked or expired; the client id and secret are fine, or this "
+            "would be invalid_client. Check publishing status at "
+            "console.cloud.google.com/auth/audience. If it says Testing, that "
+            "is the cause: Testing-status refresh tokens expire after 7 days, "
+            "and an app reverts to Testing on its own when its OAuth config "
+            "becomes incomplete — which is how this last broke, silently, "
+            "after months of working. Fix the Branding page, publish, then "
+            "re-run scripts/google_auth.py for this scope set (a token minted "
+            "while in Testing keeps its 7-day expiry, so re-mint after "
+            "publishing, not before). If it already says In production, the "
+            "grant was revoked instead: check myaccount.google.com/permissions "
+            "and just re-mint."
         )
     resp.raise_for_status()
     return resp.json()["access_token"]
