@@ -20,6 +20,7 @@ docker compose exec coach python -m coach.daily_brief --no-wait  # brief now, do
 docker compose exec coach python -m coach.daily_debrief          # close today out now (no wait to skip)
 docker compose exec coach python -m coach.wellness_sync --days 7   # pull HRV/RHR/sleep now
 docker compose exec coach python -m coach.calendar_sync --dry-run  # see the calendar snapshot
+docker compose exec coach python -m coach.trainingpeaks_sync --dry-run  # see the run coach's diff
 ```
 
 One-off setup for the Google grant (laptop, needs a browser once):
@@ -218,6 +219,83 @@ changes, so an unchanged calendar produces no commit. Note that Steffan's
 calendar contains real training (squad sessions), so entries are not uniformly
 obstacles — `week-planner` is told to treat those as already-committed sessions.
 
+**The run coach plans in TrainingPeaks, and it is mirrored in, not read live.**
+Steffan's running is prescribed by a human coach in TrainingPeaks; everything
+else is the agent's. `coach/trainingpeaks_sync.py` pulls TP's planned sessions
+for the next 14 days, keeps only the runs, and upserts them onto the
+intervals.icu calendar as `WORKOUT` events carrying a `tp:<id>` external id.
+Both scheduled jobs call it. The agent is deliberately unaware there is a second
+planning system: it reads these like any other calendar event through the MCP,
+so "the plan lives on intervals.icu" stays literally true — the same trick, and
+the same reason, as `wellness_sync`.
+
+**Read TrainingPeaks, not Coros, even though the sessions land there too.** The
+chain is coach -> TrainingPeaks -> Coros, and Coros is the last and lossiest
+link: TP holds the structure, the targets and the coach's comments, while the
+Coros copy has been flattened into a training-plan entry. Reading the far end
+would also buy nothing, because nothing carries Coros -> intervals.icu — the
+sync job has to exist either way, so it may as well read the good copy.
+
+**Run-only is a correctness constraint, not a preference.** TP holds bike and
+swim for a triathlete too, including sessions the agent itself prescribed and
+pushed the other way. Widening `trainingpeaks_sync.RUN_TYPES` would import those
+back as duplicates of events intervals.icu already has, and the agent would then
+plan against both. Races and Day Off entries are excluded for their own reasons
+(see `is_coach_run`): a TP race becomes a `RACE_A` event that reshapes
+intervals.icu's form and taper projections, and races are the athlete's own
+record in `50 Races/`.
+
+**The mirror is one-way and the agent must not fight it.** `week-planner` and
+`daily-brief` are told that a run whose description opens with
+`COACH (TrainingPeaks)` is fixed: plan around it, count its load, never move or
+replace it. `daily-brief` may still append its `COACH:` note — that survives,
+because the sync diffs on the `[tp-sync hash=...]` footer rather than the whole
+description, so an appended line does not look like a change. It is lost only if
+the coach edits that same session in TP later the same day, which is why the
+skill also asks for the reasoning in the Telegram block.
+
+**Runs are filtered out of the intervals.icu -> Coros upload.** intervals.icu
+pushes planned workouts to the watch, and TrainingPeaks pushes the same runs
+there independently; with both on, every coach run landed on the Coros twice,
+and neither API can delete the other's copy. The type filter on the intervals.icu
+Coros connection now excludes Run, so runs reach the watch from TrainingPeaks and
+everything else from intervals.icu. Two consequences to keep in mind: a run
+`week-planner` prescribes itself will *not* appear on the watch (the skill is
+told to say so), and if that filter is ever widened again the duplicates come
+straight back.
+
+**`week-planner` does not plan running on its own initiative.** The run coach
+owns running by default; the agent owns swim, bike and gym and the shape of the
+week around the runs, and builds bricks by placing a ride against one of the
+coach's runs rather than writing a run leg. This is a default, not a
+prohibition: **when Steffan explicitly asks for a run — a real brick, a shakeout,
+a recovery jog — the agent writes it.** Such a run is the agent's own event, so
+the mirror never touches it, and it will not reach the watch (runs are filtered
+out of the intervals.icu -> Coros upload), which the skill is told to say. What
+the agent must never do is decide by itself that the week needs more running.
+What it *does* do unprompted is the thing the coach cannot:
+judge the coach's running against the rest of the week's load and recommend which
+runs to drop or shorten. That is a recommendation, never an action — it acts only
+once Steffan agrees, and then only by recording the drop in
+`10 Plan/week-YYYY-Www.md` and annotating the event. **A drop cannot be enacted on
+the calendar**: the mirror re-creates anything deleted on its next run, so a
+session only truly disappears when it comes out of TrainingPeaks.
+
+**Tuesday, Thursday and Saturday are club sessions, and they arrive late.** Those
+three days are never candidates for a drop recommendation, whatever the load
+says. They are also usually uploaded by the coach only on the Sunday before, so
+an empty Tue/Thu/Sat further out means "not published yet", not "free" —
+`week-planner` reserves them rather than filling them, because a key bike or swim
+dropped into a day that later gains a club session is the failure mode that costs
+a week. Load goes onto the non-club days first (Mon/Wed/Fri/Sun) and only spills
+onto a club day, easy sessions only, if the week is still short.
+
+**Auth is a browser cookie, and it will expire.** TrainingPeaks has no public API
+for personal use, so `TP_AUTH_COOKIE` is the `Production_tpAuth` session cookie,
+pasted in by hand. When it dies the sync says so on Telegram by name rather than
+failing quietly, because a mirror that stopped looks exactly like a coach who
+stopped planning. Unset, the whole thing no-ops.
+
 **Health and calendar use separate OAuth grants and must stay separate.** One
 client, two refresh tokens (`GOOGLE_HEALTH_REFRESH_TOKEN`,
 `GOOGLE_CALENDAR_REFRESH_TOKEN`), minted by `scripts/google_auth.py --scopes ...`.
@@ -230,7 +308,9 @@ while calendar keeps working. `coach/google_oauth.py` is the shared exchange.
 handful of times a season. `agent.run(prompt, model=...)` is the seam.
 
 **Detailed weeks are generated one week at a time**, never the whole season up
-front. The macro plan holds block structure; `week-planner` fills in sessions.
+front. The macro plan holds block structure; `week-planner` fills in the swim,
+bike and gym sessions — running arrives from the coach through
+`trainingpeaks_sync`, not from the plan.
 
 ## Conventions that matter
 
@@ -238,7 +318,11 @@ front. The macro plan holds block structure; `week-planner` fills in sessions.
   failed call is reported plainly, not papered over. This rule is in the system
   prompt and repeated in the skills — keep it there when editing either.
 - **Never delete an intervals.icu calendar event.** Move it or rewrite its
-  description, and record the change in the day's note.
+  description, and record the change in the day's note. The single exception is
+  `trainingpeaks_sync`, which deletes events carrying its own `tp:` external id
+  when TrainingPeaks no longer has them — a run the coach withdrew has to
+  disappear rather than linger as a session the agent keeps grading against.
+  The agent itself has no such exception.
 - **One writer per file.** `20 Daily/YYYY-MM-DD.md` is written by `daily-debrief`
   at 21:00 and by nothing else, one note per date, after the day rather than
   before it. `30 Sessions/` is written by `session-debrief` off the webhook and

@@ -66,6 +66,10 @@ var secretNames = {
   // POST. The receiver refuses to open a port without it, so this secret is
   // what turns the feature on.
   intervalsWebhookSecret: 'intervals-webhook-secret'
+  // The run coach's plan. TrainingPeaks has no public API for personal use, so
+  // this is a browser session cookie rather than a key, and it expires — see the
+  // note on the env var below for what rotating it costs.
+  trainingPeaksCookie: 'trainingpeaks-auth-cookie'
 }
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
@@ -156,6 +160,11 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           keyVaultUrl: '${keyVaultUri}secrets/${secretNames.intervalsWebhookSecret}'
           identity: identityId
         }
+        {
+          name: secretNames.trainingPeaksCookie
+          keyVaultUrl: '${keyVaultUri}secrets/${secretNames.trainingPeaksCookie}'
+          identity: identityId
+        }
       ]
     }
     template: {
@@ -201,6 +210,16 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'GOOGLE_HEALTH_REFRESH_TOKEN', secretRef: secretNames.googleHealthRefresh }
             { name: 'GOOGLE_CALENDAR_REFRESH_TOKEN', secretRef: secretNames.googleCalendarRefresh }
             { name: 'GOOGLE_CALENDAR_IDS', value: googleCalendarIds }
+            // The run coach's TrainingPeaks plan, mirrored into intervals.icu as
+            // Run events. Unset, `trainingpeaks_sync` no-ops and the agent plans
+            // as though there were no coach — so this is the on switch.
+            //
+            // This one *will* need rotating, unlike every other secret here: it
+            // is a browser session cookie, not a key. `az keyvault secret set`
+            // then restart the revision — see the rotation note in
+            // infra/README.md, which applies to this secret more often than to
+            // any of the others.
+            { name: 'TP_AUTH_COOKIE', secretRef: secretNames.trainingPeaksCookie }
             // entrypoint.sh copies this to /root/.ssh and chmods it to 600.
             { name: 'VAULT_SSH_KEY_FILE', value: '/mnt/secrets/id_ed25519' }
           ]

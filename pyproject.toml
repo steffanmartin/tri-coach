@@ -10,6 +10,12 @@ dependencies = [
     "httpx>=0.27",
     "python-dotenv>=1.0",
     "telegramify-markdown>=1.2.0",
+    # The TrainingPeaks -> intervals.icu mirror behind `coach.trainingpeaks_sync`.
+    # Pinned to a rev, not a branch, for the same reason as the intervals MCP in
+    # the Dockerfile: this reads an undocumented TrainingPeaks endpoint, so an
+    # upstream commit landing silently on a rebuild is a change to what the coach
+    # is planning against. Bump it deliberately, after a --dry-run.
+    "tp-icu-sync @ git+https://github.com/Sladck/trainingpeaks-to-intervals-icu@be3f9457bfd6b7d24a4d3c77f5c755186643ab49",
 ]
 
 [tool.uv]

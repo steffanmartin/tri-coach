@@ -827,6 +827,16 @@ wheels = [
 ]
 
 [[package]]
+name = "tp-icu-sync"
+version = "0.1.0"
+source = { git = "https://github.com/Sladck/trainingpeaks-to-intervals-icu?rev=be3f9457bfd6b7d24a4d3c77f5c755186643ab49#be3f9457bfd6b7d24a4d3c77f5c755186643ab49" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+]
+
+[[package]]
 name = "tri-coach"
 version = "0.1.0"
 source = { virtual = "." }
@@ -837,6 +847,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-telegram-bot" },
     { name = "telegramify-markdown" },
+    { name = "tp-icu-sync" },
 ]
 
 [package.metadata]
@@ -847,6 +858,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-telegram-bot", specifier = ">=21.0" },
     { name = "telegramify-markdown", specifier = ">=1.2.0" },
+    { name = "tp-icu-sync", git = "https://github.com/Sladck/trainingpeaks-to-intervals-icu?rev=be3f9457bfd6b7d24a4d3c77f5c755186643ab49" },
 ]
 
 [[package]]

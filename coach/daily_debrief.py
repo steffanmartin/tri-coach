@@ -32,7 +32,14 @@ import asyncio
 import logging
 from datetime import date
 
-from . import agent, daily_brief, intervals, session_debrief, wellness_sync
+from . import (
+    agent,
+    daily_brief,
+    intervals,
+    session_debrief,
+    trainingpeaks_sync,
+    wellness_sync,
+)
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +98,10 @@ async def main() -> None:
         # essentially final by the evening. `wellness_sync.main` reports its own
         # failures to Telegram, so a dead sync leaves the debrief standing.
         await wellness_sync.main(include_today_steps=True)
+        # The second of the day's two mirrors. The evening one matters less for
+        # tonight than for tomorrow: it is what puts a session the coach added
+        # or withdrew today onto the calendar before the 06:00 brief reads it.
+        await trainingpeaks_sync.main()
         reply = await agent.run(prompt(missing_uploads, undebriefed))
         header = daily_brief.header("De-brief")
         await daily_brief.send(f"{header}\n{daily_brief.extract_telegram(reply)}")

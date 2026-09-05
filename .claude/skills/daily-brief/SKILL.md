@@ -65,5 +65,17 @@ Guardrails:
    reads to judge execution against what was actually prescribed. If you changed
    a session and did not manage to write the note, say so in the `<telegram>`
    block so the change is not silently lost.
+
+   **If the session is a run whose description opens with `COACH (TrainingPeaks)`,
+   it belongs to Steffan's human run coach and is mirrored from their calendar.**
+   Add the `COACH:` note as normal, but do not otherwise move, rewrite or delete
+   it, and do not add a run of your own alongside it unless Steffan asks for one.
+   On a red day, say in the `<telegram>` block what you would change about it
+   and that it is the run
+   coach's call — advising Steffan is yours to do, rewriting their prescription
+   is not. Note also that the mirror is one-way: if the coach edits that session
+   in TrainingPeaks later today, your `COACH:` note on it is overwritten, so for
+   a coach run put the reasoning in the `<telegram>` block too rather than
+   leaving it only on the event.
 3. Emit the `<telegram>` block: verdict, the numbers that drove it, the session
    as it now stands, and one sentence of why. Eight lines maximum.
