@@ -42,7 +42,7 @@ def _intervals_mcp() -> dict:
             "args": [],
             # eddmann/intervals-icu-mcp reads its own env var names (see its
             # ICUConfig in auth.py) — not the plain INTERVALS_* this app uses
-            # elsewhere (.env.example, app.bicep) — hence the remap here.
+            # elsewhere (.env.example) — hence the remap here.
             "env": {
                 "INTERVALS_ICU_API_KEY": os.environ["INTERVALS_API_KEY"],
                 "INTERVALS_ICU_ATHLETE_ID": os.environ["INTERVALS_ATHLETE_ID"],

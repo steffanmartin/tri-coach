@@ -5,3 +5,11 @@ __pycache__
 triathlon-brain
 vault-template
 scripts
+# Never let real config into an image that gets pushed to a public registry.
+# The Dockerfile does not COPY it, but a stray `COPY . .` one day would.
+.env
+# Git worktrees under .claude/ are full second checkouts of this repo, and
+# `COPY .claude/ ./.claude/` would sweep one into the image — and from there into
+# /vault/.claude, where the agent loads skills. CI checkouts have none, so this
+# only ever bit local builds.
+.claude/worktrees

@@ -1,0 +1,51 @@
+# TLS terminator for the one inbound surface tri-coach has: the intervals.icu
+# ACTIVITY_UPLOADED webhook. It replaces Container Apps ingress, which did
+# exactly this (external, targetPort 8080, allowInsecure:false) and nothing more.
+#
+# Caddy runs on the host rather than in a container because it needs 80/443, and
+# publishing those from Docker is the one case where Docker's own iptables chain
+# jumps ahead of ufw. As a host service it binds via CAP_NET_BIND_SERVICE and
+# reaches the bot over loopback, so there is no container networking involved.
+#
+# The hostname is the one One.com assigned this VPS. Two caveats, both accepted
+# deliberately: onecom-cloud.one is not on the Public Suffix List, so Let's
+# Encrypt's per-registered-domain limit is shared with every other One.com VPS
+# customer using their assigned name; and the name belongs to the provider, so a
+# rebuild could take it — and the registered webhook URL — with it. The fix for
+# both is an A/AAAA record on a domain you own; swap the site address below and
+# re-register the URL at https://intervals.icu/settings/apps.
+{
+	email steffankunoy@gmail.com
+}
+
+vps-6077.onecom-cloud.one {
+	# Exactly the two paths coach/webhook.py serves. Everything else is answered
+	# here, so a scanner never reaches the Python process at all.
+	handle /intervals/webhook {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /health {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		respond "not found" 404
+	}
+
+	# Mirrors webhook.MAX_BODY_BYTES: a webhook batch is a few KB, and anything
+	# this size is not one.
+	request_body {
+		max_size 1MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

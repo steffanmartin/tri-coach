@@ -22,6 +22,19 @@ docker compose exec coach python -m coach.wellness_sync --days 7   # pull HRV/RH
 docker compose exec coach python -m coach.calendar_sync --dry-run  # see the calendar snapshot
 ```
 
+Production is a one.com VPS, not Azure. It runs the same image, pulled from
+GHCR; `deploy/README.md` is the runbook. Everything above works there too, with
+`--env-file deploy.env` added, because the compose file's `${IMAGE_TAG}` and the
+container's secrets deliberately live in two different files:
+
+```bash
+ssh deploy@vps-6077.onecom-cloud.one
+cd /opt/tri-coach
+docker compose --env-file deploy.env logs -f
+docker compose --env-file deploy.env ps
+echo IMAGE_TAG=<older-sha> > deploy.env && docker compose --env-file deploy.env up -d  # roll back
+```
+
 One-off setup for the Google grant (laptop, needs a browser once):
 
 ```bash
@@ -84,6 +97,18 @@ already always-on, so separate scheduler infra would be wasted. This also means
 **the host must not scale to zero** — long polling dies with the process, and
 with it both jobs and the listener.
 
+**It runs on a plain VPS, and what the platform used to supply is now explicit.**
+Container Apps gave us ingress with TLS, secrets from Key Vault and log
+ingestion; on the VPS those are Caddy on the host (terminating TLS for
+`vps-6077.onecom-cloud.one`, proxying only `/intervals/webhook` and `/health` to
+`127.0.0.1:8080` and 404ing everything else), a root-owned `/opt/tri-coach/.env`,
+and a rotated json-file log. Two consequences to hold on to: the compose port
+binding is `127.0.0.1:8080` and must stay that way, because Docker's iptables
+chain runs ahead of ufw and a `0.0.0.0` binding would publish the receiver with
+no TLS at all; and `/vault` is now a **persistent named volume** rather than
+re-cloned on every cold start, so an interrupted rebase survives a restart —
+which is why `entrypoint.sh` now aborts one explicitly.
+
 **Every request funnels through `agent.run`** (`coach/agent.py`), which is the
 only place the SDK is touched. It wraps each turn in `vault.pull()` before and
 `vault.commit_and_push()` after, so the agent's writes land in git automatically
@@ -95,8 +120,20 @@ agent re-reading the vault.
 `setting_sources=["project"]` with `cwd=vault.VAULT_PATH`, and compose mounts
 `./.claude` to `/vault/.claude`. So the skills in `.claude/skills/` are loaded
 from *inside the vault* at runtime. Changing coaching logic means editing a
-SKILL.md, not the Python. The Telegram commands are thin: `/today`, `/week`,
-`/debrief`, `/day` are one-line prompts that just name a skill.
+SKILL.md, not the Python.
+
+**The image is the only source of those skills.** `entrypoint.sh` rewrites
+`$VAULT_PATH/.claude` from `/app/.claude` on every start, and the vault repo
+gitignores `.claude/`. Both halves are required, and they fail quietly if
+separated: the guard this replaced only copied when the path was absent, so once
+an early copy landed in the vault working tree and `commit_and_push`'s `git add
+-A` pushed it, every later clone arrived carrying a frozen copy that the guard
+then refused to overwrite — production ran `daily-readiness` for months after it
+had been renamed `daily-brief`. **Never commit `.claude/` to the vault repo**,
+and never restore the "only if absent" guard.
+
+The Telegram commands are thin: `/today`, `/week`, `/debrief`, `/day` are
+one-line prompts that just name a skill.
 
 **Vault folder ownership is a hard contract**, enforced in `SYSTEM_PROMPT` and
 mirrored in the skills. The agent writes only `10 Plan/`, `20 Daily/`,
@@ -259,7 +296,13 @@ front. The macro plan holds block structure; `week-planner` fills in sessions.
   recovery every 3rd–4th week) live in `vault-template/00 Meta/coaching-principles.md`
   and override plan files when they conflict. Skills reference them by name.
 - `vault-template/` is seed content copied into a fresh vault repo once at setup;
-  it is not read at runtime.
+  it is not read at runtime. It ships a `.gitignore` for `.claude/` so a fresh
+  vault cannot acquire the tracked-skills problem described above.
+- **Config lives in one file per environment.** `/opt/tri-coach/.env` on the VPS,
+  `.env` locally, with `.env.example` as the contract. This replaced Key Vault
+  plus `infra/app.bicep`'s `env:` block, which drifted from `.env.example`
+  silently — a new var that never reached the template failed only on the code
+  path that read it. A change to the deployed file needs a container restart.
 
 ## Gotcha
 

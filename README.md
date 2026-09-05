@@ -13,17 +13,19 @@ the day's sessions have uploaded.
 |---|---|---|
 | Telegram bot (long polling) | one small container | needs to be always-on; long polling means no inbound path for the chat itself |
 | Morning brief + evening debrief | same container, APScheduler | already always-on, so a separate scheduler is wasted infra |
-| Session debrief on upload | same container, HTTPS ingress | intervals.icu has to be able to reach us, so this one endpoint is served |
+| Session debrief on upload | same container, behind Caddy | intervals.icu has to be able to reach us, so this one endpoint is served |
 | Coaching skills | `.claude/skills/`, mounted into the container | plain markdown, version-controlled, editable from Obsidian |
 | Memory | the Obsidian vault, via git | the vault *is* the memory; no database |
 | Training data | intervals.icu, via MCP | single source of truth for anything numeric |
 | Deep planning sessions | Claude.ai in a browser | long back-and-forth is miserable on a phone keyboard |
 
 Host: any always-on box or container with **4 GB RAM** (the Claude Code CLI is the
-memory hog). Deployed on **Azure Container Apps**, Consumption, 2 vCPU / 4 GiB with
-`minReplicas: 1` — see [`infra/`](infra/README.md). Do not use scale-to-zero, and do
-not run more than one replica: long polling dies with the process, and two pollers on
-one Telegram token both fail.
+memory hog). Deployed on a **one.com Linux VPS** (2 vCPU / 4 GB) running Docker
+Compose behind Caddy, which terminates TLS for the webhook endpoint — see
+[`deploy/`](deploy/README.md). The image is built by GitHub Actions and pulled
+from GHCR; the VPS never builds. Do not run more than one container and do not
+put the host to sleep: long polling dies with the process, and two pollers on one
+Telegram token both fail.
 
 ---
 
@@ -92,8 +94,8 @@ tick **ACTIVITY_UPLOADED**, and wait for approval. Then, at
    Vault — see [`infra/`](infra/README.md)). Until it is set the receiver opens
    no port at all, which is what you want on a laptop.
 2. Set **Webhook URL** to `https://<your-app-fqdn>/intervals/webhook`. It must
-   be HTTPS and publicly reachable; on Container Apps the FQDN is the
-   `appFqdn` output of `app.bicep`.
+   be HTTPS and publicly reachable; on the VPS that is the hostname Caddy
+   holds a certificate for (see [`deploy/Caddyfile`](deploy/Caddyfile)).
 3. Optionally set **Webhook Authorization Header** and mirror it in
    `INTERVALS_WEBHOOK_AUTH_HEADER` for a second check.
 

@@ -9,8 +9,9 @@ from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from . import agent, daily_brief, daily_debrief, telegram_format, vault, webhook
+from . import LOG_FORMAT
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 ALLOWED = str(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
 
 

@@ -22,6 +22,7 @@ import os
 import httpx
 
 from . import google_health
+from . import LOG_FORMAT
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def _cli() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     rows = sync(args.days, dry_run=args.dry_run, include_today_steps=args.today_steps)
 
     print(json.dumps(rows, indent=2))

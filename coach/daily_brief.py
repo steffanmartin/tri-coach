@@ -22,6 +22,7 @@ from datetime import date, datetime
 import httpx
 
 from . import agent, google_health, polling, telegram_format, wellness_sync
+from . import LOG_FORMAT
 
 log = logging.getLogger(__name__)
 
@@ -139,7 +140,7 @@ def _cli() -> None:
         help="brief immediately instead of waiting for today's wellness to publish",
     )
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     asyncio.run(main(wait=not args.no_wait))
 
 

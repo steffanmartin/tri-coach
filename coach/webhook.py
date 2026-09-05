@@ -114,7 +114,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args) -> None:  # noqa: A003
         """Route access logs through logging instead of stderr, so they land in
-        `az containerapp logs` with everything else."""
+        `docker compose logs` with everything else."""
         log.info("%s - %s", self.address_string(), fmt % args)
 
     def _reply(self, code: int, body: str = "ok") -> None:
@@ -130,7 +130,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         """Health probe, and the only endpoint that says nothing about the athlete.
 
-        `/` answers too because that is what Container Apps' ingress actually
+        `/` answers too because that is what Container Apps' ingress used to
         probes — it does not know about `/health`, and every probe was logging a
         404 against a container that was serving perfectly well. Both return the
         same bare `ok`; neither reveals whether the athlete exists, has trained,
