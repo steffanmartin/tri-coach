@@ -1,129 +1,136 @@
 name: Deploy
 
-# Builds the container image server-side with `az acr build` (matches the
-# manual path in infra/README.md — correct even though runners are amd64
-# already, since Container Apps only ever runs linux/amd64), pushes it to the
-# ACR that main.bicep created, then re-deploys app.bicep with the new
-# imageTag. activeRevisionsMode: Single means the new revision replaces the
-# old one automatically — that's the "reload".
+# Builds the image on the runner, pushes it to GHCR, then SSHes into the
+# One.com VPS and does `compose pull && up -d`. Replaces the Azure pair
+# (deploy.yml + infra.yml): there is no infrastructure to deploy any more, so
+# there is no second workflow and no OIDC.
 #
-# When the push touches infra/, infra.yml runs first and re-deploys the
-# platform resources, so the outputs this workflow resolves below are the ones
-# the new templates just produced rather than the previous deployment's. It is
-# a separate workflow, called with `secrets: inherit` so it authenticates as
-# the same CI managed identity over OIDC — no second credential.
+# The image is public. steffanmartin/tri-coach is a public repo and the image
+# adds nothing to it — the Dockerfile's only COPYs are pyproject.toml/uv.lock,
+# coach/, .claude/ and entrypoint.sh, there are no build args, and every other
+# layer is public software. That is what lets the VPS `docker compose pull` with
+# no credential of any kind. GHCR packages default to private even for public
+# repos, so the package's visibility has to be flipped once by hand after the
+# first push, or the pull fails with `denied`.
 
 on:
   push:
     branches: [main]
   workflow_dispatch: {}
 
+# One deploy at a time. The VPS runs exactly one container and two overlapping
+# `compose up` runs would fight over it — and over deploy.env's IMAGE_TAG.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
 permissions:
-  id-token: write
   contents: read
+  packages: write
 
 env:
-  RESOURCE_GROUP: rg-tri-coach
+  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  # Which parts of the push need to run. deploy.yml has no `paths:` filter —
-  # every push to main ships the app — so the infra decision is made here,
-  # per-run, from the pushed range. A manual dispatch has no range to diff and
-  # deploys everything.
-  changes:
+  build:
     runs-on: ubuntu-latest
     outputs:
-      infra: ${{ steps.filter.outputs.infra }}
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+
+      # The same 7-char sha the Azure workflow used. `latest` moves too, but
+      # nothing deploys from it — deploy.env always pins a sha, which is what
+      # makes a rollback a local image and a one-line edit rather than a guess.
+      - id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
         with:
-          fetch-depth: 0
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Detect infra changes
-        id: filter
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" != "push" ]; then
-            echo "infra=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # A branch's first push, or a force-push that dropped the old tip,
-          # leaves nothing usable in `before` — fall back to the parent commit,
-          # and to deploying infra if even that is missing.
-          base="${{ github.event.before }}"
-          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            base="$(git rev-parse --verify --quiet '${{ github.sha }}^' || true)"
-          fi
-          if [ -z "$base" ]; then
-            infra=true
-          elif git diff --name-only "$base" "${{ github.sha }}" | grep -q '^infra/'; then
-            infra=true
-          else
-            infra=false
-          fi
-          echo "infra=$infra" >> "$GITHUB_OUTPUT"
-          echo "infra changed: $infra" >> "$GITHUB_STEP_SUMMARY"
-
-  # platform.bicep only — app.bicep is deployed below, with the tag built here.
-  # Redeploying platform is idempotent, so a push that only touches app.bicep
-  # passes through this as a no-op rather than needing a finer-grained filter.
-  infra:
-    needs: changes
-    if: needs.changes.outputs.infra == 'true'
-    uses: ./.github/workflows/infra.yml
-    secrets: inherit
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          # The VPS is x86_64 and buildx would otherwise pick the runner's
+          # platform implicitly. Being explicit is free insurance.
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          # NodeSource + `npm i -g @anthropic-ai/claude-code` + `uv tool install`
+          # are minutes of work that change almost never. `az acr build` had no
+          # cache at all, so this is a straight improvement on what it replaced.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
 
   deploy:
-    needs: [changes, infra]
-    # `infra` is skipped on an app-only push, which would skip this job too
-    # without an explicit condition. Run unless something actually failed.
-    if: ${{ !cancelled() && !failure() }}
+    needs: build
     runs-on: ubuntu-latest
+    # Set the DEPLOY_TO_VPS repository variable to "true" at cutover. Until
+    # then this builds and publishes but starts nothing: Telegram allows one
+    # getUpdates poller per token, so a VPS container coming up while the Azure
+    # revision is still running makes both fail with 409.
+    if: vars.DEPLOY_TO_VPS == 'true'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # Read straight from the platform deployment record instead of
-      # duplicating these as repo secrets — they're not sensitive and this
-      # keeps the workflow in sync when the infra job above has just
-      # redeployed platform.bicep.
-      - name: Resolve platform outputs
-        id: platform
+      - name: Set up SSH
         run: |
           set -euo pipefail
-          out=$(az deployment group show -g "$RESOURCE_GROUP" -n platform --query properties.outputs -o json)
-          echo "acr_name=$(jq -r .acrName.value <<<"$out")" >> "$GITHUB_OUTPUT"
-          echo "acr_login_server=$(jq -r .acrLoginServer.value <<<"$out")" >> "$GITHUB_OUTPUT"
-          echo "environment_id=$(jq -r .environmentId.value <<<"$out")" >> "$GITHUB_OUTPUT"
-          echo "identity_id=$(jq -r .identityId.value <<<"$out")" >> "$GITHUB_OUTPUT"
-          echo "key_vault_uri=$(jq -r .keyVaultUri.value <<<"$out")" >> "$GITHUB_OUTPUT"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Pinned, not StrictHostKeyChecking=no: this session hands over
+          # nothing secret, but it does run commands as a sudoer.
+          printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
-      - name: Build and push image
-        id: build
+      # The compose file is version-controlled here and copied over on every
+      # deploy, so a change to it ships through the same pipeline as a code
+      # change and the box never holds an edit nobody can find.
+      - name: Ship the compose file
         run: |
-          set -euo pipefail
-          tag="${GITHUB_SHA:0:7}"
-          az acr build \
-            -r "${{ steps.platform.outputs.acr_name }}" \
-            -t "tri-coach:$tag" \
-            --platform linux/amd64 \
-            .
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          scp -i ~/.ssh/id_ed25519 deploy/docker-compose.yml \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/tri-coach/docker-compose.yml"
 
-      - name: Deploy new revision
+      - name: Pull, restart, verify — and roll back if it never comes up
         run: |
-          az deployment group create \
-            -g "$RESOURCE_GROUP" \
-            -f infra/app.bicep \
-            -p infra/app.bicepparam \
-            -p environmentId="${{ steps.platform.outputs.environment_id }}" \
-            -p identityId="${{ steps.platform.outputs.identity_id }}" \
-            -p acrLoginServer="${{ steps.platform.outputs.acr_login_server }}" \
-            -p keyVaultUri="${{ steps.platform.outputs.key_vault_uri }}" \
-            -p imageTag="${{ steps.build.outputs.tag }}"
+          ssh -i ~/.ssh/id_ed25519 "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            IMAGE_TAG="${{ needs.build.outputs.tag }}" 'bash -euo pipefail -s' <<'REMOTE'
+          cd /opt/tri-coach
+          previous=$(sed -n 's/^IMAGE_TAG=//p' deploy.env || true)
+          echo "deploying $IMAGE_TAG (previous: ${previous:-none})"
+
+          echo "IMAGE_TAG=$IMAGE_TAG" > deploy.env
+          docker compose --env-file deploy.env pull
+          docker compose --env-file deploy.env up -d --remove-orphans
+
+          # The healthcheck curls /health inside the container, which only
+          # answers once webhook.serve has opened its port — i.e. once the bot
+          # imported cleanly, cloned or refreshed the vault, and started
+          # polling. start_period is 90s, so allow well past it.
+          for _ in $(seq 1 30); do
+            state=$(docker inspect -f '{{.State.Health.Status}}' tri-coach 2>/dev/null || echo missing)
+            case "$state" in
+              healthy) echo "healthy"; docker image prune -f >/dev/null; exit 0 ;;
+              missing) break ;;
+            esac
+            sleep 10
+          done
+
+          echo "::error::$IMAGE_TAG never became healthy"
+          docker compose --env-file deploy.env logs --tail 120 coach || true
+          if [ -n "$previous" ]; then
+            echo "rolling back to $previous"
+            echo "IMAGE_TAG=$previous" > deploy.env
+            docker compose --env-file deploy.env up -d
+          fi
+          exit 1
+          REMOTE

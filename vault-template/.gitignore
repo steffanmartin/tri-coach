@@ -1,0 +1,5 @@
+# The runtime projects the coaching skills into $VAULT_PATH/.claude from the
+# image on every start (see entrypoint.sh). If they were tracked here, the
+# agent's own `git add -A` would commit them back and the vault's frozen copy
+# would win over the image's forever — which is exactly what happened once.
+.claude/

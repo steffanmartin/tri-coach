@@ -86,7 +86,7 @@ last poll lands exactly on it. Only `daily_brief` uses it now.
 
 **`webhook.py`** — the one inbound surface. A stdlib `ThreadingHTTPServer` on
 `WEBHOOK_PORT`, serving `POST /intervals/webhook` and `GET /health` (the latter
-for the Container Apps ingress probe). It verifies the `secret` in the POST body
+for the container healthcheck and the uptime monitor). It verifies the `secret` in the POST body
 against `INTERVALS_WEBHOOK_SECRET` with `hmac.compare_digest`, optionally checks
 an `Authorization` header, drops events for any other athlete, and ignores event
 types it did not register for.
@@ -158,8 +158,8 @@ primary calendar.
 named by env var. Health and calendar are **one OAuth client but two separate
 grants**, and merging them breaks wellness silently: the Health API 403s any
 token that also carries the calendar scope. Error messages here are written for
-someone reading them as a Telegram alert at 06:00, so they name both the Azure
-and the local place to set the variable. Tokens are minted by
+someone reading them as a Telegram alert at 06:00, so they name both the
+deployed and the local place to set the variable. Tokens are minted by
 [`scripts/google_auth.py`](../scripts/google_auth.py).
 
 ## Formatting

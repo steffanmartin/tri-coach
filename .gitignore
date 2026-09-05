@@ -11,3 +11,7 @@ venv/
 /triathlon-brain/
 
 .DS_Store
+
+# Git worktrees created by Claude Code sessions. Full second checkouts;
+# .dockerignore excludes them from the image for the same reason.
+.claude/worktrees/

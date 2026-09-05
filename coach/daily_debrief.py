@@ -33,6 +33,7 @@ import logging
 from datetime import date
 
 from . import agent, daily_brief, intervals, session_debrief, wellness_sync
+from . import LOG_FORMAT
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def _cli() -> None:
     # than kept as a no-op, so an old invocation fails loudly instead of looking
     # like it did something.
     argparse.ArgumentParser(description=__doc__).parse_args()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     asyncio.run(main())
 
 

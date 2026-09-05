@@ -10,10 +10,11 @@ puts the bot token in the *path*, not a header:
     api.telegram.org/bot<TOKEN>/getUpdates
 
 So an INFO-level httpx logger writes the bot token to stdout every time the bot
-long-polls, which is every ten seconds, forever. On Azure that goes straight to
-Log Analytics, where it is readable by anyone with reader access on the
-workspace and is retained long after the token would otherwise have been
-rotated. `daily_brief.send` leaks it the same way through `/sendMessage`.
+long-polls, which is every ten seconds, forever. That goes straight into the
+container's log, which on the VPS is a json-file on disk read with `docker
+compose logs` and kept for five rotations — so the token outlives any session
+that produced it. `daily_brief.send` leaks it the same way through
+`/sendMessage`.
 
 Setting the level on the logger itself, rather than through `basicConfig`, is
 deliberate: a later `basicConfig(level=INFO)` in any entry point sets the *root*
@@ -28,3 +29,10 @@ fails, so nothing that mattered was being learned from those lines anyway.
 import logging
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Every entry point calls basicConfig with this. Container Apps stamped each log
+# line on ingest, so nothing here ever needed to; a json-file on the VPS does
+# not, and `docker compose logs -t` stamps at read time only if you remember the
+# flag. On a box where the logs are all you have, an unstamped traceback is
+# nearly useless.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"

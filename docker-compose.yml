@@ -5,7 +5,7 @@ services:
     env_file: .env
     # Bound to loopback on purpose. This is only here so the curl in CLAUDE.md
     # can reach the webhook receiver locally; a real delivery arrives through
-    # Container Apps ingress in Azure, never through this. Publishing it on
+    # Caddy on the VPS, never through this. Publishing it on
     # 0.0.0.0 would put the endpoint on your LAN for no gain. Note the receiver
     # opens no port at all unless INTERVALS_WEBHOOK_SECRET is set, so on a
     # default checkout this maps to nothing.

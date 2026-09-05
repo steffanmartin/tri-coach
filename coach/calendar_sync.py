@@ -21,6 +21,7 @@ import logging
 from datetime import date, timedelta
 
 from . import google_calendar, vault
+from . import LOG_FORMAT
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ def _cli() -> None:
     parser.add_argument("--dry-run", action="store_true", help="print it, write nothing")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     body, changed = refresh(args.days, dry_run=args.dry_run)
     print(body)
     if args.dry_run:

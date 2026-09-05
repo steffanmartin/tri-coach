@@ -1,0 +1,77 @@
+# Production compose for the One.com VPS. It lives at
+# /opt/tri-coach/docker-compose.yml and is copied there by
+# .github/workflows/deploy.yml on every deploy — edit it here, never on the box,
+# or the next deploy silently reverts you.
+#
+# Run it as:  docker compose --env-file deploy.env <cmd>
+# `--env-file` points compose's *interpolation* at deploy.env, which holds only
+# IMAGE_TAG, instead of auto-loading ./.env — that file is the container's
+# secrets and has no business being parsed for ${...} substitution, nor showing
+# up in `docker compose config` output.
+#
+# Differences from the dev docker-compose.yml at the repo root, all deliberate:
+#   - `image:` from GHCR rather than `build:`. This box has 4 GB of RAM and the
+#     npm + uv build is the heaviest thing in the project; CI builds, the VPS pulls.
+#   - no ./.claude bind mount: there is no checkout here. The skills come from
+#     the image, put in place by entrypoint.sh on every start.
+#   - the vault deploy key arrives as a read-only *directory* mount at the path
+#     VAULT_SSH_KEY_FILE already defaults to, so entrypoint.sh runs its
+#     copy-and-chmod-600 path exactly as it did under Container Apps. Mounting
+#     the directory rather than the file means rotating the key on the host is
+#     picked up on the next restart with no compose change.
+#   - log rotation, an init process, a memory ceiling and a healthcheck: the
+#     things the managed platform did for us and a bare dockerd does not.
+#
+# One container, always. Telegram permits one getUpdates poller per token, and
+# two would also race on one git working tree.
+name: tri-coach
+
+services:
+  coach:
+    image: ghcr.io/steffanmartin/tri-coach:${IMAGE_TAG:?set IMAGE_TAG in deploy.env}
+    container_name: tri-coach
+    restart: unless-stopped
+    # The Agent SDK spawns the `claude` CLI, which spawns node and the MCP
+    # server. entrypoint.sh execs the bot, so python is PID 1 and reaps nothing;
+    # over months that is a zombie farm. tini costs nothing.
+    init: true
+    env_file: .env
+    # Loopback only, and load-bearing. Caddy terminates TLS on the host and
+    # proxies here; nothing reaches this port from outside. It is also what
+    # keeps Docker's iptables rules from publishing past ufw — binding 0.0.0.0
+    # would put the webhook receiver on the public internet with no TLS.
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - vault:/vault
+      - ./secrets:/mnt/secrets:ro
+    # 4 GB box. Let Docker kill the container — restart:unless-stopped brings it
+    # straight back — rather than letting the host OOM killer choose, which is
+    # as likely to pick sshd. Raise if legitimate agent turns start exiting 137.
+    mem_limit: 3g
+    memswap_limit: 6g
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      # Only meaningful because INTERVALS_WEBHOOK_SECRET is set in production:
+      # with it unset webhook.serve opens no port at all and this would report a
+      # perfectly healthy bot as unhealthy. The deploy workflow gates its
+      # rollback on this, so keep the two facts together.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+volumes:
+  # Persistent, and a change from Azure where /vault was re-cloned on every cold
+  # start. git is still the source of truth — every agent turn ends in
+  # commit+push — but re-cloning per deploy bought nothing, and a live tree you
+  # can `docker compose exec` into is far easier to debug. The one failure mode
+  # the re-clone healed for free, an interrupted rebase, is handled explicitly
+  # in entrypoint.sh. `docker volume rm tri-coach_vault` is the reset.
+  vault:

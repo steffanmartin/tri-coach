@@ -34,8 +34,8 @@ except the operator's own.
 - **Anthropic (Claude API).** Training data and messages are sent to Anthropic's
   API to generate coaching analysis, under Anthropic's own terms and privacy
   policy: https://www.anthropic.com/legal/privacy
-- **The container host.** The application runs on Azure Container Apps in a
-  private single-tenant deployment operated by the operator.
+- **The container host.** The application runs on a Linux virtual private
+  server rented from one.com and administered solely by the operator.
 
 Nothing is sold, shared with advertisers, used to train models, or disclosed to
 any third party beyond those named above. There is no analytics or tracking of

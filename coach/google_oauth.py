@@ -20,10 +20,9 @@ def _required(var: str) -> str:
         return os.environ[var]
     except KeyError:
         raise RuntimeError(
-            f"{var} is not set. In Azure it comes from the Key Vault secret "
-            f"referenced in infra/app.bicep (a new revision is needed after "
-            f"setting it); locally it comes from .env. Mint one with "
-            f"scripts/google_auth.py."
+            f"{var} is not set. On the VPS it comes from /opt/tri-coach/.env "
+            f"(the container must be restarted after setting it); locally it "
+            f"comes from .env. Mint one with scripts/google_auth.py."
         ) from None
 
 
