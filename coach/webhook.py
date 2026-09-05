@@ -25,6 +25,13 @@ Two independent checks, and the process refuses to listen without the first:
 
 Both are compared with `hmac.compare_digest`. A request failing either is
 dropped with 403 and logged without its body.
+
+**Nothing here drops a delivery silently.** Because the handler answers 200
+before it does any work, a discarded delivery leaves no trace at either end:
+intervals.icu records a successful webhook and the vault simply never gains a
+note. So every rejection past the secret check is logged with the payload's
+*keys* — never its values, which would put the shared secret and the athlete's
+training in the logs.
 """
 import asyncio
 import hmac
@@ -40,11 +47,25 @@ log = logging.getLogger(__name__)
 WEBHOOK_PATH = "/intervals/webhook"
 HEALTH_PATH = "/health"
 
-# Only this one matters here. The app is registered for ACTIVITY_UPLOADED alone,
-# but intervals.icu decides what it sends, not us — an event type we did not ask
-# for is acknowledged and ignored rather than treated as an error, so a change on
-# their side can never put us into a retry loop.
+# The app is registered for ACTIVITY_UPLOADED alone, but intervals.icu decides
+# what it sends, not us, and it has more than one name for an activity arriving.
+# An unexpected type is still acknowledged rather than treated as an error — a
+# change on their side must never put us into a retry loop — but it is no longer
+# *ignored*, because a delivery dropped without a word is how a working receiver
+# and a broken one came to look identical in the logs.
+#
+# Widening this set cannot produce a duplicate note: `session_debrief` dedupes on
+# the `activity_id` frontmatter field, and `_in_flight` covers the window before
+# the first note is committed, so a second event for one activity costs a log line
+# and no agent turn. What is deliberately absent is anything meaning the activity
+# went away — a delete must never start a debrief.
 ACTIVITY_UPLOADED = "ACTIVITY_UPLOADED"
+ACTIVITY_EVENTS = frozenset({
+    ACTIVITY_UPLOADED,
+    "ACTIVITY_ANALYZED",
+    "ACTIVITY_CREATED",
+    "ACTIVITY_UPDATED",
+})
 
 # Bodies above this are refused unread. A webhook batch is a few KB; anything
 # this size is not one, and reading it into memory is the only cost of finding out.
@@ -66,28 +87,73 @@ def _activity_id(event: dict) -> str | None:
     return None
 
 
+def _shape(obj: dict) -> str:
+    """The keys of a payload, never the values.
+
+    Enough to recognise an envelope we guessed wrong, and nothing that would put
+    the shared secret or an athlete's training into the logs.
+    """
+    return ",".join(sorted(k for k in obj if k != "secret")) or "<none>"
+
+
+def _events(payload: dict) -> list[dict]:
+    """The event dicts in one delivery, whatever envelope it arrived in.
+
+    The documented shape is a batch — `{"secret": ..., "events": [...]}` — and it
+    is the only one this was originally written against. That turned out to be a
+    guess: a delivery that passed the secret check yielded no events at all, and
+    the envelope is the part we cannot verify from the outside. So a body that
+    carries an event's own fields at the top level is read as a batch of one
+    rather than discarded, and an `events` object is read as a batch of one too.
+    """
+    events = payload.get("events")
+    if isinstance(events, list):
+        return [event for event in events if isinstance(event, dict)]
+    if isinstance(events, dict):
+        return [events]
+    if payload.get("type") or _activity_id(payload):
+        return [payload]
+    return []
+
+
 def relevant_events(payload: dict, athlete_id: str) -> list[dict]:
-    """The ACTIVITY_UPLOADED events in this batch that belong to our athlete.
+    """The activity events in this batch that belong to our athlete.
+
+    Every rejection is logged. That is the point of this function as much as the
+    filtering is: the receiver answers 200 before it does any work, so a delivery
+    discarded here leaves no other trace anywhere — not at intervals.icu, which
+    saw a perfectly successful webhook, and not in the vault, which simply never
+    gains a note.
 
     The athlete filter is not paranoia about intervals.icu; it is what stops a
     misconfigured app — ours or someone else's pointed at this URL — from
     quietly debriefing another person's training into Steffan's vault.
     """
-    events = payload.get("events")
-    if not isinstance(events, list):
+    events = _events(payload)
+    if not events:
+        log.warning("webhook carried no events; payload keys were %s", _shape(payload))
         return []
     keep = []
     for event in events:
-        if not isinstance(event, dict) or event.get("type") != ACTIVITY_UPLOADED:
+        event_type = str(event.get("type") or "")
+        if event_type not in ACTIVITY_EVENTS:
+            log.warning(
+                "dropping event of type %r; keys were %s", event_type, _shape(event)
+            )
             continue
         if str(event.get("athlete_id") or "") != athlete_id:
-            log.warning("dropping %s for another athlete", ACTIVITY_UPLOADED)
+            log.warning("dropping %s for another athlete", event_type)
             continue
         if _activity_id(event):
             keep.append(event)
         else:
-            log.warning("dropping %s with no activity id", ACTIVITY_UPLOADED)
+            log.warning(
+                "dropping %s with no activity id; keys were %s",
+                event_type,
+                _shape(event),
+            )
     return keep
+
 
 
 # Set by `serve`. The loop and the dispatcher live here at module scope rather
@@ -178,6 +244,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         events = relevant_events(payload, self.athlete_id)
+        log.info("webhook accepted %d event(s)", len(events))
         # 200 first, work second. See the module docstring: anything slower than
         # this earns a retry, and a retry is a duplicate debrief.
         self._reply(200, f"accepted {len(events)}")

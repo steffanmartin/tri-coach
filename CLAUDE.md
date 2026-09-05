@@ -145,7 +145,7 @@ to `coach/session_debrief.py:debrief_activity` — one agent turn, one
 `30 Sessions/` note, one Telegram message, minutes after the session ends. This
 is the **only** writer of `30 Sessions/`.
 
-Four things about that receiver are load-bearing:
+Five things about that receiver are load-bearing:
 
 - **It acknowledges before it works.** intervals.icu re-fires with exponential
   backoff until it gets a 2xx, and an agent turn takes tens of seconds, so
@@ -159,6 +159,16 @@ Four things about that receiver are load-bearing:
   in-process `_in_flight` set covers the gap before the note is committed. This
   is why `session-debrief` is *required* to write `activity_id` — a note without
   it means the next delivery debriefs the session again.
+- **It never drops a delivery silently.** Because it answers 200 before it does
+  any work, a delivery discarded by `relevant_events` leaves no trace at either
+  end — intervals.icu records a successful webhook, and the vault simply never
+  gains a note. That is exactly how the first real upload was lost: an
+  authenticated delivery whose envelope did not match the guessed
+  `{"events": [...]}` shape fell through a branch that logged nothing, and the
+  receiver looked healthy for a week. Every rejection past the secret check now
+  logs the payload's *keys* — never its values, which would put the shared secret
+  and the athlete's training in the logs. Keep it that way when editing the
+  filter.
 - **It fails closed.** No `INTERVALS_WEBHOOK_SECRET`, no listening socket. That
   is what makes the code safe to run on a laptop and safe to ship ahead of the
   webhook being registered.
