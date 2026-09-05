@@ -21,7 +21,14 @@ from datetime import date, datetime
 
 import httpx
 
-from . import agent, google_health, polling, telegram_format, wellness_sync
+from . import (
+    agent,
+    google_health,
+    polling,
+    telegram_format,
+    trainingpeaks_sync,
+    wellness_sync,
+)
 
 log = logging.getLogger(__name__)
 
@@ -125,6 +132,11 @@ async def main(wait: bool = True) -> None:
         # the upsert picks those corrections up. `wellness_sync.main` reports its
         # own failures to Telegram, so a dead sync leaves the brief standing.
         await wellness_sync.main()
+        # Before the agent looks at the day, not after: the run coach's session
+        # for today has to already be on the calendar for `daily-brief` to
+        # confirm or work around it. Reports its own failures to Telegram, so a
+        # dead TP cookie leaves the brief standing on the last mirror.
+        await trainingpeaks_sync.main()
         reply = await agent.run(prompt(missing))
         await send(f"{header('Brief')}\n{extract_telegram(reply)}")
     except Exception as exc:  # never fail silently in the morning
