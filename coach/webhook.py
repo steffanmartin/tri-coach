@@ -128,9 +128,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802
-        """Health probe. Container Apps ingress needs something to call, and it
-        is the one endpoint that says nothing about the athlete."""
-        if self.path.split("?", 1)[0] == HEALTH_PATH:
+        """Health probe, and the only endpoint that says nothing about the athlete.
+
+        `/` answers too because that is what Container Apps' ingress actually
+        probes — it does not know about `/health`, and every probe was logging a
+        404 against a container that was serving perfectly well. Both return the
+        same bare `ok`; neither reveals whether the athlete exists, has trained,
+        or is being coached at all.
+        """
+        if self.path.split("?", 1)[0] in (HEALTH_PATH, "/"):
             self._reply(200)
         else:
             self._reply(404, "not found")
