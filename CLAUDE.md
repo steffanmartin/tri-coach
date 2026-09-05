@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An always-on triathlon coach for one athlete (Steffan). A Telegram bot long-polls
 for messages, hands each one to the Claude Agent SDK, and the agent reasons over
 two data sources: **intervals.icu** (all numbers, via MCP) and a **git-backed
-Obsidian vault** (all memory, via plain file tools). There is no database and no
-web service — the vault repo *is* the state store.
+Obsidian vault** (all memory, via plain file tools). There is no database — the
+vault repo *is* the state store. The process serves exactly one HTTP endpoint,
+the intervals.icu webhook receiver, and nothing else.
 
 ## Commands
 
@@ -16,7 +17,7 @@ web service — the vault repo *is* the state store.
 docker compose up -d --build          # build + run the bot (the only real "run" path)
 docker compose logs -f
 docker compose exec coach python -m coach.daily_brief --no-wait  # brief now, don't wait for wellness
-docker compose exec coach python -m coach.daily_debrief --no-wait # debrief now, don't wait for uploads
+docker compose exec coach python -m coach.daily_debrief          # close today out now (no wait to skip)
 docker compose exec coach python -m coach.wellness_sync --days 7   # pull HRV/RHR/sleep now
 docker compose exec coach python -m coach.calendar_sync --dry-run  # see the calendar snapshot
 ```
@@ -55,18 +56,33 @@ debrief's polling all work locally without that install.
 
 There is no test suite, linter, or CI. Verification is manual: `/status` in
 Telegram for the bot path, `python -m coach.daily_brief --no-wait` and
-`python -m coach.daily_debrief --no-wait` for the scheduled paths (drop the flag
-to exercise the polling wait itself). The debrief is the one that writes to the
-vault, so a successful run leaves a commit behind.
+`python -m coach.daily_debrief` for the scheduled paths. Both write to the vault,
+so a successful run leaves a commit behind.
+
+For the webhook path, `/debrief` in Telegram exercises the same
+`session-debrief` skill without needing an upload. To test delivery itself, POST
+a payload shaped like the real one and watch for a `30 Sessions/` commit:
+
+```bash
+curl -sS -X POST http://localhost:8080/intervals/webhook \
+  -H 'Content-Type: application/json' \
+  -d '{"secret":"'"$INTERVALS_WEBHOOK_SECRET"'","events":[{"athlete_id":"'"$INTERVALS_ATHLETE_ID"'",
+       "type":"ACTIVITY_UPLOADED","activity":{"id":"i123","name":"Test","type":"Run"}}]}'
+```
+
+It answers `accepted 1` immediately — that is delivery acknowledged, not the
+debrief finished; the run happens after the response. A real id that already has
+a note is a no-op, which is the dedupe working, not a failure.
 
 ## Architecture
 
-**One process, three entry points.** `coach/telegram_bot.py:main` starts the
-polling loop and an in-process `AsyncIOScheduler` holding two cron jobs:
-`daily_brief.main` at 06:00 and `daily_debrief.main` at 21:00. Deliberate: the
-container is already always-on, so separate scheduler infra would be wasted. This
-also means **the host must not scale to zero** — long polling dies with the
-process, and with it both jobs.
+**One process, four entry points.** `coach/telegram_bot.py:main` starts the
+polling loop, an in-process `AsyncIOScheduler` holding two cron jobs
+(`daily_brief.main` at 06:00, `daily_debrief.main` at 21:00), and the webhook
+receiver (`webhook.serve`) on its own thread. Deliberate: the container is
+already always-on, so separate scheduler infra would be wasted. This also means
+**the host must not scale to zero** — long polling dies with the process, and
+with it both jobs and the listener.
 
 **Every request funnels through `agent.run`** (`coach/agent.py`), which is the
 only place the SDK is touched. It wraps each turn in `vault.pull()` before and
@@ -123,32 +139,68 @@ logged and retried, never raised, so one Google 500 at 06:10 does not cost the
 day's brief. Steps are excluded from the wait on purpose — the morning does not
 write them, so waiting on them would wait forever.
 
-**The debrief closes the day, and owns the daily note.** `daily_debrief.main` is
-the same shape at the other end of the day: it starts at
-`DAILY_DEBRIEF_CRON_HOUR/MINUTE` (21:00), polls every
-`ACTIVITY_POLL_INTERVAL_MIN` (10) until every planned session for today has an
-activity recorded against it, and at `DAILY_DEBRIEF_DEADLINE_HOUR/MINUTE` (23:00)
-runs anyway with the count of what never uploaded passed into the prompt. It then
-debriefs each activity into `30 Sessions/` and writes `20 Daily/YYYY-MM-DD.md`.
-The wait loop itself is shared with the brief — `coach/polling.py:poll_until` —
-so the retry, deadline and never-sleep-past-it behaviour cannot drift between
-them. Here it polls **intervals.icu**, which is not a contradiction of the
-morning polling Google Health: wellness is in intervals.icu only because our sync
-put it there, whereas activities come from Coros and are genuinely upstream of
-us. `coach/intervals.py` is that read path, and it exists only to let a scheduled
-job decide whether waking the agent is worth it — it is not a second numbers
-source for the agent, which still reads everything through the MCP. Planned
-events are narrowed to Run/Ride/Swim (`intervals.TRACKED_SPORTS`) because gym and
-mobility never produce an upload and would otherwise hold every night at the
-deadline. `coach/intervals.py` uses REST rather than the MCP because it runs
-inside the polling loop, before there is an agent turn to host a tool call.
+**Sessions are debriefed on upload, not in a nightly batch.** The intervals.icu
+ACTIVITY_UPLOADED webhook POSTs to `coach/webhook.py`, which hands the activity
+to `coach/session_debrief.py:debrief_activity` — one agent turn, one
+`30 Sessions/` note, one Telegram message, minutes after the session ends. This
+is the **only** writer of `30 Sessions/`.
+
+Four things about that receiver are load-bearing:
+
+- **It acknowledges before it works.** intervals.icu re-fires with exponential
+  backoff until it gets a 2xx, and an agent turn takes tens of seconds, so
+  holding the connection open would earn a retry and the retry would debrief the
+  same session twice. The handler verifies, schedules, and returns 200. Never
+  make it await the debrief. It also never returns 204, which intervals.icu has
+  historically treated as a failure.
+- **Idempotency lives in the vault, not a side table.** `already_debriefed`
+  greps `30 Sessions/` for the `activity_id:` frontmatter field, so the record of
+  "this was done" is the note itself; delete a note and it gets rebuilt. An
+  in-process `_in_flight` set covers the gap before the note is committed. This
+  is why `session-debrief` is *required* to write `activity_id` — a note without
+  it means the next delivery debriefs the session again.
+- **It fails closed.** No `INTERVALS_WEBHOOK_SECRET`, no listening socket. That
+  is what makes the code safe to run on a laptop and safe to ship ahead of the
+  webhook being registered.
+- **`agent.run` is serialised** by a module-level lock. An upload can land
+  mid-debrief, and two turns would rebase onto each other's half-written git
+  state. Do not remove that lock to make things feel faster.
+
+The receiver is stdlib `ThreadingHTTPServer` on purpose: a few POSTs a day from
+one source did not justify putting a web framework in the dependencies of a
+process whose only other inbound path is long polling.
+
+**The debrief closes the day, and owns the daily note.** `daily_debrief.main`
+runs at a fixed `DAILY_DEBRIEF_CRON_HOUR/MINUTE` (21:00) and writes
+`20 Daily/YYYY-MM-DD.md` — nothing else. It used to poll intervals.icu until
+every planned session had uploaded, giving up at 23:00; that wait existed only to
+decide when to spend one big agent run on the whole day, and with notes written
+as uploads land there is nothing left to wait for. **Do not reintroduce the
+wait, and do not let this job write `30 Sessions/`** — it would produce a second
+note for sessions that already have one.
+
+What it must still do is name the gaps, and `daily_debrief.gaps` counts two
+kinds: planned sessions with no activity (the upload never came, or the session
+did not happen — the job must not decide which), and activities with no session
+note (the webhook never arrived, or its debrief failed). The second is the only
+place a silently-lost webhook becomes visible, since delivery is
+fire-and-forget. Both counts go into the prompt as facts rather than being left
+for the model to infer. `coach/intervals.py` is that read path — a single
+snapshot now, not a loop — and it is not a second numbers source for the agent,
+which still reads everything through the MCP. Planned events are narrowed to
+Run/Ride/Swim (`intervals.TRACKED_SPORTS`) because gym and mobility never produce
+an upload and would otherwise always look like a missed session. It uses REST
+rather than the MCP because it runs before there is an agent turn to host a tool
+call.
 
 **The daily note is written once, in the evening.** `20 Daily/YYYY-MM-DD.md` used
 to be written at 06:00 by `daily-brief`, which meant the vault's record of a
-day was a prediction that nothing ever reconciled — and `30 Sessions/` never got
-written to at all. Now `daily-debrief` is the sole writer of both, and
-`daily-brief` writes nothing to the vault: **do not restore its `20 Daily/`
-write**, or the two jobs will fight over one file. The cost of this is that the
+day was a prediction that nothing ever reconciled. Now `daily-debrief` is its
+sole writer and `daily-brief` writes nothing to the vault: **do not restore its
+`20 Daily/` write**, or the two jobs will fight over one file. Each file has
+exactly one writer — `20 Daily/` the evening job, `30 Sessions/` the webhook
+path, `00 Meta/calendar.md` `calendar_sync` — and that is what keeps them from
+ever conflicting. The cost of this is that the
 morning's reasoning prose is not archived; what survives is the Telegram message
 and, when a session was changed, the `COACH:` note `daily-brief` puts on the
 intervals.icu event description. That note is now load-bearing — it is what the
@@ -187,9 +239,17 @@ front. The macro plan holds block structure; `week-planner` fills in sessions.
   prompt and repeated in the skills — keep it there when editing either.
 - **Never delete an intervals.icu calendar event.** Move it or rewrite its
   description, and record the change in the day's note.
-- **`20 Daily/` and `30 Sessions/` are written by `daily-debrief` at 21:00, and by
-  nothing else.** One note per date, written after the day, not before it.
-  `daily-brief` must stay a Telegram-only job.
+- **One writer per file.** `20 Daily/YYYY-MM-DD.md` is written by `daily-debrief`
+  at 21:00 and by nothing else, one note per date, after the day rather than
+  before it. `30 Sessions/` is written by `session-debrief` off the webhook and
+  by nothing else. `daily-brief` must stay a Telegram-only job.
+- **`session-debrief` must write `activity_id` into a note's frontmatter.** It is
+  the only dedupe key; without it a re-fired webhook debriefs the same session
+  twice. See `session_debrief.already_debriefed`.
+- **The model count is now per-session, not per-day.** A busy day can be three
+  agent turns rather than one, on top of the two scheduled jobs. That was the
+  price of debriefing on upload, and `COACH_MODEL` staying Sonnet is what keeps
+  it affordable.
 - **Medical escalation is not optional.** Sharp/localised pain, fever, or three
   consecutive red readiness days ends prescription and routes to a physio/GP.
 - **Auth is a single chat-ID check** (`telegram_bot._authorised`). It is the only

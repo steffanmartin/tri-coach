@@ -11,8 +11,9 @@ the day's sessions have uploaded.
 
 | Piece | Where | Why there |
 |---|---|---|
-| Telegram bot (long polling) | one small container | needs to be always-on; long polling means no public endpoint, no TLS, no webhook |
+| Telegram bot (long polling) | one small container | needs to be always-on; long polling means no inbound path for the chat itself |
 | Morning brief + evening debrief | same container, APScheduler | already always-on, so a separate scheduler is wasted infra |
+| Session debrief on upload | same container, HTTPS ingress | intervals.icu has to be able to reach us, so this one endpoint is served |
 | Coaching skills | `.claude/skills/`, mounted into the container | plain markdown, version-controlled, editable from Obsidian |
 | Memory | the Obsidian vault, via git | the vault *is* the memory; no database |
 | Training data | intervals.icu, via MCP | single source of truth for anything numeric |
@@ -66,18 +67,41 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-Verify: send `/status` in Telegram. Then, inside the container, test both
+Verify: send `/status` in Telegram. Then, inside the container, run both
 scheduled jobs without waiting for the clock:
 
 ```bash
 docker compose exec coach python -m coach.daily_brief --no-wait
-docker compose exec coach python -m coach.daily_debrief --no-wait
+docker compose exec coach python -m coach.daily_debrief
 ```
 
-The debrief is the one that writes `20 Daily/` and `30 Sessions/`, so a
-successful run should show a new commit on the vault repo.
+Both write to the vault, so a successful run should show a new commit on the
+vault repo — `20 Daily/` from the debrief, `30 Sessions/` from `/debrief`.
 
-### 5. Seed the plan
+### 5. intervals.icu webhook (session debrief on upload)
+
+Optional, and everything above works without it — but this is what makes a
+session get debriefed minutes after you finish rather than at 21:00.
+
+Webhooks need a registered OAuth application; a personal API key cannot
+subscribe to them. Apply at [intervals.icu/oauth/apply](https://intervals.icu/oauth/apply),
+tick **ACTIVITY_UPLOADED**, and wait for approval. Then, at
+[/settings/apps](https://intervals.icu/settings/apps):
+
+1. Copy the app's **secret** into `INTERVALS_WEBHOOK_SECRET` in `.env` (or Key
+   Vault — see [`infra/`](infra/README.md)). Until it is set the receiver opens
+   no port at all, which is what you want on a laptop.
+2. Set **Webhook URL** to `https://<your-app-fqdn>/intervals/webhook`. It must
+   be HTTPS and publicly reachable; on Container Apps the FQDN is the
+   `appFqdn` output of `app.bicep`.
+3. Optionally set **Webhook Authorization Header** and mirror it in
+   `INTERVALS_WEBHOOK_AUTH_HEADER` for a second check.
+
+Note that activity webhooks are **not delivered for Strava-sourced activities** —
+your watch needs a direct connection to intervals.icu (Coros, Garmin, Wahoo etc.)
+under Settings → Connections.
+
+### 6. Seed the plan
 Set `race_date` in `10 Plan/ironman-macro-plan.md`, fill in the TBDs in
 `00 Meta/athlete-profile.md`, then from Claude.ai (not Telegram — this is a long
 conversation) run the `plan-architect` skill. It writes the block table and the
@@ -104,11 +128,15 @@ Then `/week` each Sunday for the detailed week.
   publish it briefs at 09:00 anyway and says which numbers are missing, rather
   than grading a night it cannot see. All four times are env vars — see
   `.env.example`.
-- **The debrief waits for your uploads.** From 21:00 it polls intervals.icu every
-  10 minutes until every planned session for the day has an activity against it,
-  then writes a note per session into `30 Sessions/` and the day's note into
-  `20 Daily/`. At 23:00 it stops waiting and says what never uploaded — a session
-  whose file has not arrived is not the same as one that did not happen.
+- **Sessions are debriefed as they upload.** The intervals.icu ACTIVITY_UPLOADED
+  webhook fires `session-debrief`, which writes one `30 Sessions/` note and sends
+  it to Telegram, minutes after you finish. Deliveries are de-duplicated on the
+  `activity_id` in the note's frontmatter, so a re-fired webhook is a no-op.
+- **The debrief closes the day at 21:00, fixed.** It no longer waits for uploads
+  — there is nothing left to wait for — and it writes only `20 Daily/`. It still
+  names both kinds of gap: a planned session with no activity, and an activity
+  that never got a note. A session whose file has not arrived is not the same as
+  one that did not happen, and it will not pretend to know which.
 - **The daily note is written in the evening, not the morning.** There is exactly
   one `20 Daily/YYYY-MM-DD.md` per day and the debrief owns it, so it describes
   the day that happened rather than the day that was predicted. The morning brief

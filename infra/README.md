@@ -60,6 +60,22 @@ the 06:15 wellness sync dies on `GOOGLE_HEALTH_REFRESH_TOKEN` every morning and
 the calendar snapshot quietly goes stale — the sync is the agent's only source of
 HRV, resting HR, sleep and steps.
 
+Finally the intervals.icu webhook secret. `app.bicep` references it, so the
+revision will not start until it exists — set it to a placeholder if the OAuth
+app is not approved yet, and rotate it in once it is:
+
+```bash
+az keyvault secret set --vault-name "$KV" -n intervals-webhook-secret --value "..."
+```
+
+The real value is on your app's page at https://intervals.icu/settings/apps.
+It arrives in the body of every webhook POST and the receiver compares against
+it, so a placeholder means deliveries are rejected with 403 — the bot is
+otherwise unaffected, and Telegram, both scheduled jobs and the vault all keep
+working. **Changing a Key Vault secret does not restart the app**, so rotate the
+placeholder out with a revision restart, or the receiver keeps checking against
+the old value.
+
 Setting secrets requires **Key Vault Secrets Officer** on the vault for *you* —
 the template grants the app's identity read access, not your user account:
 
@@ -78,6 +94,21 @@ az deployment group create -g tri-coach -f infra/app.bicep -p infra/app.biceppar
 az containerapp logs show -g tri-coach -n tricoach-bot --follow
 ```
 
+## 5. Point the webhook at it
+
+The app now has external ingress — one endpoint, `/intervals/webhook`. Take the
+FQDN from the deployment output and register it at
+https://intervals.icu/settings/apps under **Webhook URLs**:
+
+```bash
+az deployment group show -g tri-coach -n app --query properties.outputs.appFqdn.value -o tsv
+# -> https://<that>/intervals/webhook
+```
+
+It must be HTTPS (ingress terminates TLS; `allowInsecure` is false) and the FQDN
+is stable across revisions, so this is set once. Tick **ACTIVITY_UPLOADED** and
+nothing else.
+
 ## Verify
 
 - Logs show `vault: cloning` once, then the bot polling with no traceback.
@@ -87,6 +118,13 @@ az containerapp logs show -g tri-coach -n tricoach-bot --follow
   `/vault/.claude`, which is what `entrypoint.sh` puts in place.
 - A commit authored by `tri-coach` appears in the vault repo — proves the deploy
   key and the push path.
+- `curl -fsS https://<fqdn>/health` returns `ok` — proves ingress reaches the
+  receiver. If this 404s the container is up but the receiver never started,
+  which almost always means `INTERVALS_WEBHOOK_SECRET` is empty; it fails closed
+  and logs `INTERVALS_WEBHOOK_SECRET unset — not listening for webhooks`.
+- After the next ride or run, a `30 Sessions/` commit and a Telegram message
+  within a few minutes — proves the whole webhook path. Logs show
+  `<id>: debriefing`.
 
 ## Redeploying after a code change
 
@@ -170,7 +208,16 @@ deliberately, so a half-applied platform never gets a new revision pointed at it
 ## Things that will bite
 
 - **Never raise `maxReplicas` above 1.** Telegram permits one `getUpdates` poller
-  per token; a second replica makes both fail with 409 Conflict.
+  per token; a second replica makes both fail with 409 Conflict. Webhooks make
+  this worse, not better: ingress would spread deliveries across replicas that
+  cannot see each other's in-flight debriefs, so the same session could be
+  written twice by two replicas racing on one git tree.
+- **The app now has a public endpoint.** `/intervals/webhook` and `/health` are
+  reachable from the internet. What defends the first is the shared secret in
+  each POST body, compared constant-time; `/health` returns `ok` and nothing
+  else. If the secret is ever exposed, rotate it at
+  https://intervals.icu/settings/apps, update Key Vault, and restart the
+  revision — a Key Vault change alone does not take effect.
 - **The vault is re-cloned on every cold start.** Replica storage is ephemeral, and
   that is deliberate: git is the source of truth and the repo is small markdown.
   Anything the agent had written but not yet pushed is lost on a restart.

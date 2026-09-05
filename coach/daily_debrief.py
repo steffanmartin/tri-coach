@@ -1,48 +1,81 @@
-"""Evening job: wait for the day's sessions to upload, then close the day out.
+"""Evening job: close the day out. Fixed 21:00, no waiting.
 
-The morning brief is a prediction; this is the record. It summarises what was
-actually trained and what the body did, writes a note per activity into
-`30 Sessions/`, and writes the day's `20 Daily/` note — which, unlike the brief,
-is a description of a day that has happened.
+The morning brief is a prediction; this is the record. It writes
+`20 Daily/YYYY-MM-DD.md` and nothing else.
 
-It starts at 21:00 and polls for uploads rather than assuming they have landed.
-A club session finishing at 19:30 reaches intervals.icu whenever the phone next
-talks to Coros, which is not a time we control, and debriefing a session that
-is not there yet is worse than debriefing it half an hour late. At 23:00 it
-stops waiting and reports what never arrived instead of inventing it.
+**It no longer writes `30 Sessions/`, and no longer waits for uploads.** Both
+changed for the same reason: `session_debrief` now runs per activity, triggered
+by the intervals.icu ACTIVITY_UPLOADED webhook, so a session is analysed minutes
+after it finishes instead of hours later in a batch. The old shape polled
+intervals.icu from 21:00 until every planned session had an activity against it,
+giving up at 23:00 — that poll existed purely to answer "is there more still
+coming?" before spending one big agent run on the whole day. With the notes
+already written as the day went, there is nothing left to wait for, so this runs
+at 21:00 and reads what is there.
 
-Polling intervals.icu here is right, and is not a contradiction of the morning
-job polling Google Health instead. Wellness is in intervals.icu only because
-`wellness_sync` puts it there, so polling for it would be watching our own
-writes; activities come from Coros, which we do not write, so intervals.icu is
-genuinely upstream of us for these.
+What it must still do is be honest about the gaps, and there are now two kinds:
 
-    python -m coach.daily_debrief             # the cron path: wait, then debrief
-    python -m coach.daily_debrief --no-wait   # debrief whatever is there now
+- a planned session with no activity at all — the upload never arrived, or the
+  session did not happen, and this job must not decide which
+- an activity that uploaded but has no `30 Sessions/` note — the webhook did not
+  reach us, or the debrief failed. Worth saying out loud, because it is the only
+  place that failure becomes visible; the webhook itself is fire-and-forget.
+
+Both are counted here and passed into the prompt rather than left for the agent
+to infer, so the numbers come from the same REST reads the rest of the package
+uses rather than from the model's reading of a folder listing.
+
+    python -m coach.daily_debrief    # run it now
 """
 import argparse
 import asyncio
 import logging
-import os
-from datetime import date, datetime
+from datetime import date
 
-from . import agent, daily_brief, intervals, polling, wellness_sync
+from . import agent, daily_brief, intervals, session_debrief, wellness_sync
 
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL_MIN = int(os.environ.get("ACTIVITY_POLL_INTERVAL_MIN", 10))
+
+def gaps(day: date) -> tuple[int, int]:
+    """(planned sessions with no activity, activities with no session note).
+
+    The first is a count, not a matching: intervals.icu does not reliably link an
+    activity back to the event it fulfilled, and planned events are already
+    narrowed to sports that produce an upload (`intervals.TRACKED_SPORTS`), so a
+    gym-only day counts zero rather than looking like a missed session. Floored
+    at zero so an unplanned extra session cannot make it negative.
+    """
+    activities = intervals.activities(day)
+    planned = intervals.planned_workouts(day)
+    missing_uploads = max(0, len(planned) - len(activities))
+    undebriefed = sum(
+        1
+        for activity in activities
+        if activity.get("id")
+        and not session_debrief.already_debriefed(str(activity["id"]))
+    )
+    return missing_uploads, undebriefed
 
 
-def prompt(unlogged: int = 0) -> str:
+def prompt(missing_uploads: int = 0, undebriefed: int = 0) -> str:
     """Built per run, never at import — see the note in `daily_brief.prompt`."""
     gap = ""
-    if unlogged:
-        gap = (
-            f"\n{unlogged} planned session(s) for today still have no matching "
+    if missing_uploads:
+        gap += (
+            f"\n{missing_uploads} planned session(s) for today have no matching "
             "activity on intervals.icu. Say that plainly. Do not assume they were "
             "skipped, and do not invent duration, load or intervals for them — an "
             "upload that has not arrived is not the same as a session that did not "
             "happen.\n"
+        )
+    if undebriefed:
+        gap += (
+            f"\n{undebriefed} activity/activities recorded today have no note in "
+            "`30 Sessions/`, which means the per-activity debrief never ran for "
+            "them. Name them in the change log as un-debriefed rather than "
+            "analysing them here, and report what intervals.icu holds for them at "
+            "summary level only.\n"
         )
     return f"""Run the `daily-debrief` skill for {date.today().isoformat()}.
 {gap}
@@ -51,56 +84,14 @@ max 8 short lines, no markdown headings, no emoji spam (one status emoji is fine
 """
 
 
-def _deadline() -> datetime:
-    return polling.deadline_from_env(
-        "DAILY_DEBRIEF_DEADLINE_HOUR", "DAILY_DEBRIEF_DEADLINE_MINUTE", 23, 0
-    )
-
-
-def pending_sessions(day: date) -> int:
-    """How many of today's planned sessions have no activity recorded yet.
-
-    A count, not a matching: intervals.icu does not reliably link an activity
-    back to the event it fulfilled, and a coarse count is enough to answer the
-    only question the poll asks — is there more still coming? Planned events are
-    already narrowed to sports that produce an upload (see
-    `intervals.TRACKED_SPORTS`), so a gym-only or rest day counts zero and
-    debriefs immediately instead of waiting until 23:00 for nothing.
-
-    Floored at zero, so an unplanned extra session does not make the count
-    negative and stall the loop.
-    """
-    return max(0, len(intervals.planned_workouts(day)) - len(intervals.activities(day)))
-
-
-async def wait_for_activities(deadline: datetime | None = None) -> int:
-    """Poll until every planned session has uploaded, or until the deadline.
-
-    Returns how many are still unaccounted for — 0 means the day is fully in.
-    """
-    day = date.today()
-    return await polling.poll_until(
-        check=lambda: pending_sessions(day),
-        # Assume the whole day is outstanding on a failed read, so a transient
-        # error keeps the loop waiting instead of ending it early.
-        on_error=1,
-        deadline=deadline or _deadline(),
-        interval_min=POLL_INTERVAL_MIN,
-        label="activities",
-        describe=lambda n: f"{n} session(s)",
-    )
-
-
-async def main(wait: bool = True) -> None:
+async def main() -> None:
     try:
-        # A deadline of "now" collapses the wait to a single check, so the manual
-        # path and the scheduled one still run the same code.
-        unlogged = await wait_for_activities(None if wait else datetime.now())
+        missing_uploads, undebriefed = await asyncio.to_thread(gaps, date.today())
         # Today's steps are worth writing now: unlike at 06:00, the count is
         # essentially final by the evening. `wellness_sync.main` reports its own
         # failures to Telegram, so a dead sync leaves the debrief standing.
         await wellness_sync.main(include_today_steps=True)
-        reply = await agent.run(prompt(unlogged))
+        reply = await agent.run(prompt(missing_uploads, undebriefed))
         header = daily_brief.header("De-brief")
         await daily_brief.send(f"{header}\n{daily_brief.extract_telegram(reply)}")
     except Exception as exc:  # never fail silently
@@ -108,15 +99,12 @@ async def main(wait: bool = True) -> None:
 
 
 def _cli() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--no-wait",
-        action="store_true",
-        help="debrief immediately instead of waiting for today's activities to upload",
-    )
-    args = parser.parse_args()
+    # No --no-wait any more: there is no wait to skip. The flag is gone rather
+    # than kept as a no-op, so an old invocation fails loudly instead of looking
+    # like it did something.
+    argparse.ArgumentParser(description=__doc__).parse_args()
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(main(wait=not args.no_wait))
+    asyncio.run(main())
 
 
 if __name__ == "__main__":

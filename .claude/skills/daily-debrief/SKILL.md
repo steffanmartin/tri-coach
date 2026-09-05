@@ -1,19 +1,27 @@
 ---
 name: daily-debrief
-description: Close out the day — what was actually trained, how it went against what was prescribed, and what the body did. Writes the day's session notes and its daily note. Use for the 21:00 job, /day, or "how did today go".
+description: Close out the day — what was actually trained, how it went against what was prescribed, and what the body did. Writes the day's daily note, reading the session notes already written on upload. Use for the 21:00 job, /day, or "how did today go".
 ---
 
 # Daily debrief
 
 This runs at the end of the day, not the start. `daily-brief` predicts;
-this records. It is also the **only** writer of `20 Daily/YYYY-MM-DD.md` — the
+this records. It is the **only** writer of `20 Daily/YYYY-MM-DD.md` — the
 morning brief no longer writes one, so if you skip step 3 the day has no note.
+
+**Do not write `30 Sessions/`.** Each session was already debriefed as it
+uploaded, by `session-debrief` fired from the intervals.icu webhook. Those notes
+are an input to this job, not an output of it. Writing one here would produce a
+second note for a session that already has one.
 
 ## 1. Gather (never skip, never guess)
 
 - `00 Meta/athlete-profile.md` and `00 Meta/coaching-principles.md`
 - This week's plan, `10 Plan/week-YYYY-Www.md` — what today was *supposed* to be
 - intervals.icu activities for today, with per-interval detail for each
+- **Today's `30 Sessions/` notes** — one per activity, written when it uploaded.
+  These are your account of how each session went; read them rather than
+  re-deriving the analysis from the raw activity data.
 - Today's planned calendar events, **including the description**. If the morning
   changed a session it left a `COACH:` note there, and that note is the only
   durable record of the morning's call — read it before judging execution
@@ -25,11 +33,17 @@ morning brief no longer writes one, so if you skip step 3 the day has no note.
 If an activity is missing, say so. A session whose upload has not arrived is not
 the same as a session that did not happen — do not decide which it was.
 
-## 2. Debrief each activity
+## 2. Reconcile the day's sessions
 
-For every activity recorded today, run the `session-debrief` skill and write its
-`30 Sessions/YYYY-MM-DD-<slug>.md` note. Follow that skill rather than
-re-deriving its analysis here, so the two never drift.
+Every activity recorded today should already have a `30 Sessions/` note. Line the
+two up and account for both kinds of gap — the prompt tells you the counts:
+
+- **A planned session with no activity.** The upload has not arrived, or the
+  session did not happen. Say which is unknown; do not pick one.
+- **An activity with no session note.** The webhook never reached the coach, or
+  its debrief failed. Note it in the change log as un-debriefed and summarise it
+  at surface level only — do not write the missing note here, and do not pass it
+  off as analysed.
 
 ## 3. Write the daily note
 
@@ -44,7 +58,8 @@ same as a missing measurement, so say which it is.
 - `## Planned vs actual` — the plan's session, the prescription as it stood
   after any morning change (the `COACH:` note), and what was actually done.
   Name the gap plainly when there is one.
-- `## Sessions` — one line per `30 Sessions/` note written today.
+- `## Sessions` — one line per `30 Sessions/` note for today, linking each, plus
+  any activity that has no note yet.
 - `## Change log` — anything moved, any tool call that failed, any data anomaly.
 
 One note per date. On a re-run, rewrite it rather than appending a second copy.

@@ -1,14 +1,18 @@
-"""Wait-for-the-data loop shared by the morning brief and the evening debrief.
+"""Wait-for-the-data loop. Used by the morning brief.
 
-Both scheduled jobs have the same shape: start at a cron time, poll an external
-service until the day's data has actually landed, and give up at a deadline
-rather than never running. The differences are only *what* is polled and how the
-outstanding work is described, so the loop itself lives here once.
+Start at a cron time, poll an external service until the day's data has actually
+landed, and give up at a deadline rather than never running.
 
-Two rules this encodes, and neither is incidental:
+The evening debrief used to share this, waiting for the day's activities to
+upload before spending one model run on all of them. It no longer does: session
+notes are written per activity as the ACTIVITY_UPLOADED webhook fires, so there
+is nothing for 21:00 to wait for. This stayed a separate module rather than
+folding back into `daily_brief` because the shape is genuinely reusable — the
+wait is over whether *someone else's* data has arrived, which is a thing more
+than one job can need — and because these two rules are worth keeping stated:
 
 - A failed poll is logged and retried, never raised. One 500 from Google at 06:10
-  or from intervals.icu at 21:10 must not cost the day's message.
+  must not cost the day's message.
 - The loop never sleeps past the deadline — the last poll lands exactly on it.
 """
 import asyncio

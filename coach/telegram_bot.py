@@ -1,4 +1,5 @@
-"""Always-on Telegram bot (long polling) + in-process cron for the daily jobs."""
+"""Always-on Telegram bot (long polling) + in-process cron + the webhook receiver."""
+import asyncio
 import logging
 import os
 
@@ -7,7 +8,7 @@ from telegram import BotCommand, MessageEntity, Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from . import agent, daily_brief, daily_debrief, telegram_format, vault
+from . import agent, daily_brief, daily_debrief, telegram_format, vault, webhook
 
 logging.basicConfig(level=logging.INFO)
 ALLOWED = str(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
@@ -74,10 +75,12 @@ def main() -> None:
         minute=int(os.environ.get("DAILY_BRIEF_CRON_MINUTE", 0)),
     )
 
-    # Same shape at the other end of the day: this is when the debrief starts
-    # looking for the day's activities to finish uploading from Coros, not when
-    # it sends. It writes the day's `20 Daily/` note — the morning brief does
-    # not — so if this job stops running, the vault stops gaining daily notes.
+    # The other end of the day, and unlike the brief this one is a fixed time.
+    # It used to poll until the day's sessions had uploaded; that wait is gone
+    # because `session_debrief` now writes each `30 Sessions/` note as its
+    # activity lands (see webhook.py), so by 21:00 there is nothing left to wait
+    # for. This job writes the day's `20 Daily/` note and nothing else — if it
+    # stops running, the vault stops gaining daily notes.
     scheduler.add_job(
         daily_debrief.main,
         "cron",
@@ -89,6 +92,11 @@ def main() -> None:
     # this synchronous main() — post_init runs inside the loop run_polling creates.
     async def _start_scheduler(app: Application) -> None:
         scheduler.start()
+        # The one inbound surface. Returns None (and opens no port) unless
+        # INTERVALS_WEBHOOK_SECRET is set, so an unconfigured deployment behaves
+        # exactly as it did before webhooks existed. Handed this loop explicitly
+        # because the server runs on its own thread and has to marshal work back.
+        webhook.serve(asyncio.get_running_loop())
         # Populates Telegram's "/" autocomplete menu with these commands and
         # descriptions; without it the handlers still work but are invisible
         # until typed from memory.

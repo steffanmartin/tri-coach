@@ -1,4 +1,5 @@
 """Thin wrapper around the Claude Agent SDK, pointed at the vault + intervals.icu."""
+import asyncio
 import os
 
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
@@ -72,7 +73,23 @@ def _text(message) -> str:
     return "".join(b.text for b in message.content if isinstance(b, TextBlock))
 
 
+# Serialises agent turns across every caller. Each run mutates one git working
+# tree — pull, let the agent write, commit, push — so two overlapping turns would
+# rebase onto each other's half-written state and one of them would lose its
+# note. This was academic while the only callers were Telegram (one message at a
+# time) and two cron jobs hours apart; ACTIVITY_UPLOADED changed that, since an
+# upload can land in the middle of the evening debrief. Held for the whole turn,
+# so a long `plan-architect` run does delay a session debrief behind it — which
+# is the right trade against a corrupted vault.
+_RUN_LOCK = asyncio.Lock()
+
+
 async def run(prompt: str, model: str | None = None) -> str:
+    async with _RUN_LOCK:
+        return await _run(prompt, model)
+
+
+async def _run(prompt: str, model: str | None = None) -> str:
     vault.pull()
     # Refreshed here rather than in the /week handler because `week-planner` is
     # also reachable by plain text ("plan my week"), which never touches a

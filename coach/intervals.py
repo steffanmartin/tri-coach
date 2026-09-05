@@ -1,10 +1,13 @@
 """Read-only intervals.icu REST client.
 
 The agent reads every number through the intervals MCP — this module exists for
-the one thing the agent cannot do: let a *scheduled job* decide whether it is
-worth waking the agent at all. `daily_debrief` polls here to find out if today's
-sessions have finished uploading from Coros before it spends a model run on
-them.
+the one thing the agent cannot do: let code outside an agent turn find out what
+the day holds. `daily_debrief` reads here at 21:00 to count the day's gaps —
+planned sessions with no activity against them — so the prompt can state them as
+facts rather than leaving the model to infer them from a folder listing.
+
+It used to be polled in a loop until every session had uploaded. That wait is
+gone; the read is now a single snapshot.
 
 Auth is the same shape `wellness_sync.push` already uses: HTTP basic with the
 literal username `API_KEY` and the key as the password.

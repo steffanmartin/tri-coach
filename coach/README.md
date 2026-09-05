@@ -8,13 +8,15 @@ for the architecture behind these splits.
 
 | Module | Role |
 |---|---|
-| `telegram_bot.py` | process entry point: long-polling bot + the in-process scheduler |
+| `telegram_bot.py` | process entry point: long-polling bot, scheduler, webhook receiver |
 | `agent.py` | the only place the Claude Agent SDK is touched |
 | `vault.py` | git clone/pull/commit/push around the Obsidian vault |
 | `daily_brief.py` | the 06:00 readiness job |
 | `daily_debrief.py` | the 21:00 end-of-day job |
+| `webhook.py` | the intervals.icu webhook receiver — the one inbound surface |
+| `session_debrief.py` | debrief one activity on upload; sole writer of `30 Sessions/` |
 | `intervals.py` | read-only intervals.icu REST client, for the jobs only |
-| `polling.py` | the wait-for-the-data loop both scheduled jobs share |
+| `polling.py` | the wait-for-the-data loop, used by the morning brief |
 | `telegram_format.py` | markdown → Telegram entities, shared by both send paths |
 | `wellness_sync.py` | push Fitbit wellness into intervals.icu; run by both jobs |
 | `google_health.py` | Google Health API client (HRV, resting HR, sleep, steps) |
@@ -27,15 +29,19 @@ for the architecture behind these splits.
 **`telegram_bot.py`** — `main()` is what the container runs. It clones the vault
 if needed, registers the `/today`, `/week`, `/debrief`, `/day` and `/status`
 handlers plus a catch-all text handler, starts an `AsyncIOScheduler` holding the
-two cron jobs (the morning brief and the evening debrief), and hands control to
-`run_polling`. Auth is one chat-ID comparison in `_authorised`; unauthorised
-updates are dropped with no reply. The command handlers are deliberately thin —
-each is a one-line prompt naming a skill.
+two cron jobs (the morning brief and the evening debrief), starts the webhook
+receiver on its own thread, and hands control to `run_polling`. Auth on the chat
+side is one chat-ID comparison in `_authorised`; unauthorised updates are dropped
+with no reply. The command handlers are deliberately thin — each is a one-line
+prompt naming a skill.
 
 **`agent.py`** — `run(prompt, model=None)` is the single seam onto the SDK. It
 pulls the vault, refreshes the calendar snapshot, runs one fresh `query()`, and
-commits and pushes whatever the agent wrote. There is no conversation memory
-between calls; continuity comes from the agent re-reading the vault. Also holds
+commits and pushes whatever the agent wrote. Turns are serialised behind
+`_RUN_LOCK`: each one mutates a single git working tree, and since webhooks
+arrived a session upload can land in the middle of a scheduled job. There is no
+conversation memory between calls; continuity comes from the agent re-reading
+the vault. Also holds
 `SYSTEM_PROMPT` (the hard rules, including folder ownership and medical
 escalation), the intervals MCP server definition, and the tool allowlist — note
 there is no Bash and no network tool, which is why the calendar has to be synced
@@ -47,12 +53,12 @@ the package shells out to git.
 
 ## Scheduled jobs
 
-Both jobs have the same shape: start at a cron time, poll until the day's data
-has actually landed, give up at a deadline rather than never running, then hand a
-`<telegram>`-tagged prompt to `agent.run`. The loop itself lives once in
-`polling.py`. Both build their prompt *per run* — a module-level f-string would
-freeze `date.today()` at container start, and the scheduler holds these modules
-in memory for months.
+Both hand a `<telegram>`-tagged prompt to `agent.run`, and both build their
+prompt *per run* — a module-level f-string would freeze `date.today()` at
+container start, and the scheduler holds these modules in memory for months.
+They no longer have the same shape otherwise: the morning waits for data that
+may not have arrived, the evening does not, because nothing is outstanding by
+then.
 
 **`daily_brief.py`** — 06:00. Polls Google Health for the night's HRV, resting HR
 and sleep, syncs them, and briefs; at 09:00 it briefs anyway, naming what never
@@ -61,32 +67,60 @@ arrived. Sends over the Bot API directly rather than through the bot's
 Failures are sent to Telegram, never swallowed. Runnable by hand:
 `python -m coach.daily_brief --no-wait`.
 
-**`daily_debrief.py`** — 21:00. Polls intervals.icu until every planned session
-for today has an activity recorded, then debriefs each one into `30 Sessions/`
-and writes the day's `20 Daily/` note. It is the **only** writer of the daily
-note — `daily-brief` no longer writes one, because a note written at 06:00
-describes a day that has not happened. At 23:00 it stops waiting and says what
-never uploaded rather than guessing whether the session happened. Runnable by
-hand: `python -m coach.daily_debrief --no-wait`.
-
-Polling intervals.icu here, and Google Health in the morning, is not an
-inconsistency: wellness is in intervals.icu only because `wellness_sync` puts it
-there, so polling for it would be watching our own writes, whereas activities
-come from Coros and are genuinely upstream of us.
+**`daily_debrief.py`** — 21:00, fixed, and it writes only the day's `20 Daily/`
+note. It is the **only** writer of that file — `daily-brief` no longer writes
+one, because a note written at 06:00 describes a day that has not happened, and
+it no longer writes `30 Sessions/` either, because `session_debrief` already did
+as each activity landed. The old poll-until-everything-uploaded wait is gone with
+it. `gaps()` still reads intervals.icu once, to count planned sessions with no
+activity and activities with no session note; both counts go into the prompt as
+facts rather than being left to the model. The second is the only place a lost
+webhook becomes visible. Runnable by hand: `python -m coach.daily_debrief`.
 
 **`polling.py`** — `poll_until(check, on_error, deadline, interval_min, label)`.
 Runs `check` off-thread (the event loop is busy long-polling Telegram), logs and
 retries on failure instead of raising, and never sleeps past the deadline, so the
-last poll lands exactly on it.
+last poll lands exactly on it. Only `daily_brief` uses it now.
+
+## The webhook path
+
+**`webhook.py`** — the one inbound surface. A stdlib `ThreadingHTTPServer` on
+`WEBHOOK_PORT`, serving `POST /intervals/webhook` and `GET /health` (the latter
+for the Container Apps ingress probe). It verifies the `secret` in the POST body
+against `INTERVALS_WEBHOOK_SECRET` with `hmac.compare_digest`, optionally checks
+an `Authorization` header, drops events for any other athlete, and ignores event
+types it did not register for.
+
+Three things not to change casually:
+
+- **It replies 200 before doing the work.** intervals.icu retries on anything
+  that is not 2xx, and an agent turn is far too slow to hold a connection open
+  for; a retry would be a duplicate debrief. It also never sends 204, which
+  intervals.icu has historically read as failure.
+- **It fails closed.** No secret configured, no socket opened — so a laptop
+  checkout behaves exactly as it did before webhooks existed.
+- **The loop and dispatcher are module-level, not class attributes.** A plain
+  function on a handler class becomes a bound method, so `self.dispatch(event)`
+  would pass the handler as a phantom first argument and every delivery would
+  die *after* the 200 had gone out — invisible from intervals.icu's side.
+
+**`session_debrief.py`** — the work itself, and deliberately trigger-agnostic:
+`debrief_activity(activity_id, name, sport)` knows nothing about webhooks, so a
+poller could drive it instead without the debrief logic changing. It is the sole
+writer of `30 Sessions/`. Idempotency has two layers, because a webhook is not a
+promise of exactly-once delivery: `already_debriefed` greps `30 Sessions/` for
+the `activity_id:` frontmatter field, so the vault is its own record of what is
+done, and an in-process `_in_flight` set covers the window before that note
+exists. Delete a note and it gets rebuilt; that is a feature.
 
 **`intervals.py`** — read-only REST client, `activities(day)` and
-`planned_workouts(day)`. Exists purely so a scheduled job can decide whether it
-is worth waking the agent; it is deliberately not a general client, since a
-second numbers source is what the wellness sync exists to prevent. Planned events
-are narrowed to Run/Ride/Swim, because gym and mobility never produce an upload
-and would hold the poll at the deadline every night. It goes to REST rather than
-through the intervals MCP because it runs before there is an agent turn to host
-an MCP tool call.
+`planned_workouts(day)`. Exists so code outside an agent turn can find out what
+the day holds — now a single snapshot for `daily_debrief.gaps` rather than a
+poll. Deliberately not a general client, since a second numbers source is what
+the wellness sync exists to prevent. Planned events are narrowed to Run/Ride/Swim,
+because gym and mobility never produce an upload and would otherwise always look
+like a missed session. It goes to REST rather than through the intervals MCP
+because it runs before there is an agent turn to host an MCP tool call.
 
 **`wellness_sync.py`** — reads days from `google_health` and PUTs them to
 intervals.icu's `wellness-bulk` endpoint. Both scheduled jobs call it. Writes are
