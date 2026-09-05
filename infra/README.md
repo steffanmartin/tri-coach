@@ -76,6 +76,23 @@ working. **Changing a Key Vault secret does not restart the app**, so rotate the
 placeholder out with a revision restart, or the receiver keeps checking against
 the old value.
 
+And the run coach's TrainingPeaks plan. `app.bicep` references this too, so the
+revision will not start until it exists — set a placeholder if you are not
+mirroring the coach's runs yet:
+
+```bash
+az keyvault secret set --vault-name "$KV" -n trainingpeaks-auth-cookie --value "V001..."
+```
+
+Get the value from a browser: log in at trainingpeaks.com, DevTools ->
+Application -> Cookies -> `Production_tpAuth`, and take the value only.
+TrainingPeaks has no public API for personal use, so this is a session cookie
+rather than a key, and **it is the one secret here that expires on its own**.
+When it does, `coach.trainingpeaks_sync` says so by name on Telegram and the
+brief carries on against the last mirror; set the new value and restart the
+revision to resume. A placeholder (or no value) means the sync no-ops and the
+agent plans as though there were no run coach — nothing else is affected.
+
 Setting secrets requires **Key Vault Secrets Officer** on the vault for *you* —
 the template grants the app's identity read access, not your user account:
 
@@ -222,7 +239,12 @@ deliberately, so a half-applied platform never gets a new revision pointed at it
   that is deliberate: git is the source of truth and the repo is small markdown.
   Anything the agent had written but not yet pushed is lost on a restart.
 - **Changing a Key Vault secret does not restart the app.** Deploy a new revision
-  or restart the current one to pick up a rotated value.
+  or restart the current one to pick up a rotated value. This bites most often on
+  `trainingpeaks-auth-cookie`, which is a browser session cookie and expires on
+  its own schedule — it is the only secret here you should expect to rotate
+  routinely. (Microsoft documents versionless Key Vault references as
+  auto-refreshing within 30 minutes and restarting revisions that use them in an
+  env var; that has not been what this app does, so restart rather than wait.)
 - **Adding config to the app means editing `app.bicep`, not just `.env`.** The
   two lists drift silently: a new var in `.env.example` that never reaches the
   `env` block here fails only on the code path that reads it, which for the
